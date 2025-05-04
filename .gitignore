@@ -1,0 +1,9 @@
+.venv
+.env
+credentials.json
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.db
+*.sqlite3
