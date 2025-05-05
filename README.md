@@ -1,21 +1,54 @@
-# Discord Verification Bot
+# 🤖 Discord Verification Bot
 
-Este bot verifica a nuevos miembros de un servidor de Discord usando una hoja de cálculo de Google Sheets.
+Bot de Discord para **verificar usuarios nuevos** mediante una **clave** almacenada en una **hoja de cálculo de Google Sheets**, asignarles el rol correspondiente y permitirles solicitar soporte si tienen problemas.
 
-## Características
-- Solicita una clave por mensaje privado.
-- Busca esa clave en Google Sheets.
-- Si es válida, cambia el apodo y asigna un rol al usuario.
+---
 
-## Requisitos
+## ✨ Características
+
+- ✅ Verifica a nuevos miembros al entrar en el servidor.
+- 📩 Solicita una clave por mensaje privado al nuevo usuario.
+- 🔍 Busca la clave en Google Sheets.
+- 🧑‍💼 Si es válida:
+  - Cambia su apodo.
+  - Asigna el rol especificado.
+- ❌ Si la clave no es válida, notifica al usuario y a los administradores.
+- 🔐 Comando `!testclave` para que los administradores comprueben manualmente claves.
+- 🆘 Comando `!soporte` para que **cualquier usuario** pueda enviar una solicitud privada de ayuda al equipo de admins.
+
+---
+
+## 📋 Requisitos
+
 - Python 3.8+
-- Un bot de Discord con permisos de cambiar nicknames y asignar roles.
-- Hoja de Google Sheets compartida con la cuenta de servicio de Google.
+- Un bot de Discord con los siguientes permisos:
+  - Leer mensajes y mensajes directos.
+  - Enviar mensajes y mensajes embebidos.
+  - Gestionar apodos.
+  - Gestionar roles.
+- Una hoja de cálculo de Google Sheets con:
+  - Acceso compartido a la cuenta de servicio.
+  - Formato de columnas: `Clave`, `Nombre Discord`, `Rol Asignado`.
+
+---
+
+## ⚙️ Instalación
+
+1. Clona este repositorio:
+
+```bash
+git clone https://github.com/tuusuario/discord-verification-bot.git
+cd discord-verification-bot
+```
+
+---
 
 ## Uso
 1. Crea y configura tu archivo `.env`.
 2. Agrega tu `credentials.json` de Google en la raíz del proyecto.
 3. Ejecuta el bot con `python bot.py`.
+
+---
 
 ## Estructura esperada del Sheet
 
@@ -23,3 +56,10 @@ Este bot verifica a nuevos miembros de un servidor de Discord usando una hoja de
 |--------|----------------|---------------|
 | ABC123 | David Ibañez   | Desarrollador |
 
+---
+
+## Ejecuta el bot
+
+```bash
+python bot.py
+```
