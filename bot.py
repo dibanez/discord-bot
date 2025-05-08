@@ -78,18 +78,38 @@ async def on_member_join(member):
             pass
 
 @bot.command(name="testclave")
-@has_permissions(administrator=True)
 async def test_clave(ctx, clave: str = None):
+    """Prueba una clave sin aplicar cambios (solo admin)"""
     
+    # Verificamos si el usuario es administrador en algún servidor
+    es_admin = False
+    if isinstance(ctx.channel, discord.DMChannel):
+        # En DM, verificamos si es admin en algún servidor compartido
+        for guild in bot.guilds:
+            member = guild.get_member(ctx.author.id)
+            if member and member.guild_permissions.administrator:
+                es_admin = True
+                break
+    else:
+        # En canal de servidor, verificamos permisos normalmente
+        es_admin = ctx.author.guild_permissions.administrator
+    
+    # Si no es administrador, denegamos el acceso
+    if not es_admin:
+        await ctx.send("❌ Necesitas permisos de Administrador para usar este comando.")
+        return
+    
+    # Si no se proporciona la clave
     if clave is None:
         await ctx.send("❌ Uso: `!testclave [clave]`")
         return
     
     try:
-        global client, sheet
-        if client.auth.expired:
-            client.login()
-        sheet = client.open(GOOGLE_SHEET_NAME).worksheet(GOOGLE_SHEET_TAB)
+        # Refrescamos la conexión a Google Sheets para evitar timeout
+        # global client, sheet
+        # if client.auth.expired:
+        #     client.login()
+        # sheet = client.open(GOOGLE_SHEET_NAME).worksheet(GOOGLE_SHEET_TAB)
         
         # Buscamos la clave en la hoja
         rows = sheet.get_all_records()
@@ -100,11 +120,24 @@ async def test_clave(ctx, clave: str = None):
                 nombre = row["Nombre Discord"]
                 rol_nombre = row["Rol Asignado"]
                 
+                # Verificamos si el rol existe (solo si estamos en un servidor)
                 rol_status = "❓ No se puede verificar en DM"
                 if not isinstance(ctx.channel, discord.DMChannel):
                     role = discord.utils.get(ctx.guild.roles, name=rol_nombre)
                     rol_status = "✅ Rol existe" if role else "⚠️ Rol no encontrado"
+                else:
+                    # En DM, intentamos verificar en todos los servidores compartidos
+                    rol_encontrado = False
+                    for guild in bot.guilds:
+                        role = discord.utils.get(guild.roles, name=rol_nombre)
+                        if role:
+                            rol_status = f"✅ Rol existe en {guild.name}"
+                            rol_encontrado = True
+                            break
+                    if not rol_encontrado:
+                        rol_status = "⚠️ Rol no encontrado en ningún servidor"
                 
+                # Enviamos el resultado en un mensaje embebido para mejor formato
                 embed = discord.Embed(
                     title="✅ Prueba de Clave",
                     description=f"Resultado para la clave: `{clave}`",
@@ -118,20 +151,25 @@ async def test_clave(ctx, clave: str = None):
                 await ctx.send(embed=embed)
                 encontrado = True
                 
+                # Registramos en el canal de logs
                 if log_channel:
-                    await log_channel.send(f"🔍 **{ctx.author.name}** probó la clave `{clave}` en DM - Asignaría: `{nombre}` con rol `{rol_nombre}`")
+                    where = "en DM" if isinstance(ctx.channel, discord.DMChannel) else f"en #{ctx.channel.name}"
+                    await log_channel.send(f"🔍 **{ctx.author.name}** probó la clave `{clave}` {where} - Asignaría: `{nombre}` con rol `{rol_nombre}`")
                 break
         
         if not encontrado:
             await ctx.send("❌ Clave no encontrada en la hoja de cálculo.")
             
+            # Registramos en el canal de logs
             if log_channel:
-                await log_channel.send(f"🔍 **{ctx.author.name}** probó una clave inválida en DM: `{clave}`")
+                where = "en DM" if isinstance(ctx.channel, discord.DMChannel) else f"en #{ctx.channel.name}"
+                await log_channel.send(f"🔍 **{ctx.author.name}** probó una clave inválida {where}: `{clave}`")
                 
     except Exception as e:
         print(f"[ERROR] {e}")
         await ctx.send(f"❗ Error al probar la clave: `{e}`")
         
+        # Registramos el error en el canal de logs
         if log_channel:
             await log_channel.send(f"❗ Error en comando testclave por **{ctx.author.name}**: `{e}`")
 
