@@ -154,24 +154,25 @@ async def on_ready():
         await log_channel.send("🟢 Bot iniciado correctamente.")
 
 
-async def _verify_member_key(member, key_provided):
+async def _verify_member_key(member, key_provided, current_sheet, current_log_channel):
     """
     Verifies the member's key, assigns role, and sends relevant messages.
+    Accepts sheet and log_channel objects for testability.
     Returns True if key was found and all critical operations succeeded, False otherwise.
     """
     try:
         try:
-            rows = sheet.get_all_records()
+            rows = current_sheet.get_all_records()
         except SpreadsheetNotFound:
-            if log_channel: await log_channel.send(f"❗ **ERROR CRÍTICO:** Hoja de cálculo '{GOOGLE_SHEET_NAME}' no encontrada. User: {member.name} ({member.id})")
+            if current_log_channel: await current_log_channel.send(f"❗ **ERROR CRÍTICO:** Hoja de cálculo '{GOOGLE_SHEET_NAME}' no encontrada. User: {member.name} ({member.id})")
             await member.send(MSG_VERIFY_ERROR_CRITICAL_SHEET)
             return False
         except WorksheetNotFound:
-            if log_channel: await log_channel.send(f"❗ **ERROR CRÍTICO:** Pestaña '{GOOGLE_SHEET_TAB}' no encontrada en '{GOOGLE_SHEET_NAME}'. User: {member.name} ({member.id})")
-            await member.send(MSG_VERIFY_ERROR_CRITICAL_SHEET)
+            if current_log_channel: await current_log_channel.send(f"❗ **ERROR CRÍTICO:** Pestaña '{GOOGLE_SHEET_TAB}' no encontrada en '{GOOGLE_SHEET_NAME}'. User: {member.name} ({member.id})")
+            await current_log_channel.send(MSG_VERIFY_ERROR_CRITICAL_SHEET)
             return False
         except GSpreadAPIError as e_gspread:
-            if log_channel: await log_channel.send(f"❗ **ERROR API GOOGLE:** {e_gspread} al leer la hoja. User: {member.name} ({member.id})")
+            if current_log_channel: await current_log_channel.send(f"❗ **ERROR API GOOGLE:** {e_gspread} al leer la hoja. User: {member.name} ({member.id})")
             await member.send(MSG_VERIFY_ERROR_SHEET_API)
             return False
 
@@ -185,9 +186,9 @@ async def _verify_member_key(member, key_provided):
                 try:
                     await member.edit(nick=nombre)
                 except DiscordForbiddenError:
-                    if log_channel: await log_channel.send(f"⚠️ **Permiso denegado:** No se pudo cambiar el apodo de {member.mention} ({member.id}) a '{nombre}'.")
+                    if current_log_channel: await current_log_channel.send(f"⚠️ **Permiso denegado:** No se pudo cambiar el apodo de {member.mention} ({member.id}) a '{nombre}'.")
                 except DiscordHTTPException as e_discord_http:
-                    if log_channel: await log_channel.send(f"❗ **Error Discord API:** Al cambiar apodo de {member.mention} ({member.id}): {e_discord_http}")
+                    if current_log_channel: await current_log_channel.send(f"❗ **Error Discord API:** Al cambiar apodo de {member.mention} ({member.id}): {e_discord_http}")
                 
                 role_assigned_successfully = False
                 role_to_assign = discord.utils.get(member.guild.roles, name=rol_nombre)
@@ -197,36 +198,36 @@ async def _verify_member_key(member, key_provided):
                         await member.add_roles(role_to_assign)
                         role_assigned_successfully = True
                         await member.send(MSG_VERIFY_SUCCESS.format(rol_nombre=rol_nombre))
-                        if log_channel: await log_channel.send(f"✅ **{member.name} ({member.id})** verificado como `{nombre}` y asignado el rol `{rol_nombre}`.")
+                        if current_log_channel: await current_log_channel.send(f"✅ **{member.name} ({member.id})** verificado como `{nombre}` y asignado el rol `{rol_nombre}`.")
                     except DiscordForbiddenError:
-                        if log_channel: await log_channel.send(f"⚠️ **Permiso denegado:** No se pudo asignar el rol '{rol_nombre}' a {member.mention} ({member.id}).")
+                        if current_log_channel: await current_log_channel.send(f"⚠️ **Permiso denegado:** No se pudo asignar el rol '{rol_nombre}' a {member.mention} ({member.id}).")
                         # Attempt to notify user that role assignment failed
                         try: await member.send(MSG_VERIFY_ERROR_PERMISSION + f" (No se pudo asignar el rol '{rol_nombre}')")
                         except: pass # User DMs might be closed
                     except DiscordHTTPException as e_discord_http:
-                        if log_channel: await log_channel.send(f"❗ **Error Discord API:** Al asignar rol '{rol_nombre}' a {member.mention} ({member.id}): {e_discord_http}")
+                        if current_log_channel: await current_log_channel.send(f"❗ **Error Discord API:** Al asignar rol '{rol_nombre}' a {member.mention} ({member.id}): {e_discord_http}")
                         try: await member.send(MSG_VERIFY_ERROR_DISCORD_API + f" (Al intentar asignar el rol '{rol_nombre}')")
                         except: pass
                 else:
                     await member.send(MSG_VERIFY_ROLE_NOT_FOUND.format(rol_nombre=rol_nombre))
-                    if log_channel: await log_channel.send(f"⚠️ **{member.name} ({member.id})** tenía clave válida, pero rol `{rol_nombre}` no encontrado.")
+                    if current_log_channel: await current_log_channel.send(f"⚠️ **{member.name} ({member.id})** tenía clave válida, pero rol `{rol_nombre}` no encontrado.")
                 
                 return True # Key was found, attempted operations. Individual errors logged.
 
         if not key_found_in_sheet:
             # Key not found, DO NOT send DM here. Simply return False.
             # Logging of individual failed attempts can be done here if desired.
-            if log_channel: # Optional: Log every failed attempt from here
-                await log_channel.send(f"ℹ️ Intento de clave fallido para {member.name} ({member.id}) con clave: '{key_provided}'")
+            if current_log_channel: # Optional: Log every failed attempt from here
+                await current_log_channel.send(f"ℹ️ Intento de clave fallido para {member.name} ({member.id}) con clave: '{key_provided}'")
             return False
 
     except (DiscordForbiddenError, DiscordHTTPException) as e_discord_direct_send: # Catch errors from direct member.send calls if user blocks bot mid-process
         # This can happen if user blocks bot or DMs become unavailable after _verify_member_key started.
-        if log_channel: await log_channel.send(f"❗ Error enviando DM a {member.name} ({member.id}) durante _verify_member_key (e.g. user blocked DMs): {e_discord_direct_send}")
+        if current_log_channel: await current_log_channel.send(f"❗ Error enviando DM a {member.name} ({member.id}) durante _verify_member_key (e.g. user blocked DMs): {e_discord_direct_send}")
         return False # Failed to communicate with user
     except Exception as e:
         print(f"[ERROR EN _verify_member_key] para {member.name} ({member.id}): {e}")
-        if log_channel: await log_channel.send(f"❗ Error interno no esperado verificando a **{member.name} ({member.id})**: `{e}`")
+        if current_log_channel: await current_log_channel.send(f"❗ Error interno no esperado verificando a **{member.name} ({member.id})**: `{e}`")
         try:
             await member.send(MSG_VERIFY_ERROR_GENERAL)
         except: pass # User might have DMs blocked or left
@@ -273,7 +274,7 @@ async def on_member_join(member):
 
             key_provided = msg.content.strip()
             # Pass the current attempt number for logging purposes, if needed by _verify_member_key
-            verification_successful = await _verify_member_key(member, key_provided)
+            verification_successful = await _verify_member_key(member, key_provided, sheet, log_channel)
 
             if verification_successful:
                 # _verify_member_key handles success messages to user and log

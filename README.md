@@ -63,3 +63,17 @@ cd discord-verification-bot
 ```bash
 python bot.py
 ```
+
+---
+
+## 🧪 Pruebas (Testing)
+
+Este proyecto incluye un conjunto de pruebas unitarias para asegurar la calidad y el correcto funcionamiento del bot.
+
+Para ejecutar las pruebas, sitúate en el directorio raíz del proyecto y ejecuta el siguiente comando en tu terminal:
+
+```bash
+python -m unittest discover tests
+```
+
+Esto descubrirá y ejecutará automáticamente todas las pruebas unitarias ubicadas en el directorio `tests/`. Asegúrate de tener todas las dependencias del proyecto instaladas, aunque las pruebas unitarias están diseñadas para mockear dependencias externas como la API de Discord y Google Sheets.
