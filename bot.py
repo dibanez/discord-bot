@@ -258,7 +258,7 @@ async def on_member_join(member):
             try:
                 # The prompt to enter the key is the welcome message (first attempt) 
                 # or the retry message (subsequent attempts).
-                msg = await bot.wait_for("message", check=check, timeout=120.0) # 120 seconds timeout
+                msg = await bot.wait_for("message", check=check, timeout=540.0) # 540 seconds timeout
             except asyncio.TimeoutError:
                 # Using existing timeout message, but log attempt context
                 timeout_message_to_send = MSG_MEMBER_JOIN_TIMEOUT # Default timeout message
