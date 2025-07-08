@@ -6,4 +6,3 @@ PyNaCl
 openai-whisper
 pydub
 ffmpeg-python
-py-cord[voice]

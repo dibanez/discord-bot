@@ -569,23 +569,143 @@ async def support(ctx, *, message: str = None):
             )
 
 
-class SimpleAudioRecorder:
-    def __init__(self, filename):
-        self.filename = filename
-        self.is_recording = False
-        self.audio_data = []
+
+
+async def recording_finished_callback(sink, channel, filename, guild_id):
+    """Callback que se ejecuta cuando termina la grabación"""
+    try:
+        await channel.send("🔄 Procesando audio grabado...")
         
-    def start_recording(self):
-        self.is_recording = True
+        # WaveSink guarda archivos automáticamente, necesitamos acceder a ellos
+        if not hasattr(sink, 'audio_data') or not sink.audio_data:
+            await channel.send("⚠️ No se grabó ningún audio.")
+            return
         
-    def stop_recording(self):
-        self.is_recording = False
+        # Procesar archivos de audio individuales
+        participants = []
+        audio_files = []
         
-    def save_audio(self):
-        if self.audio_data:
-            audio_file = f"{self.filename}.wav"
-            return audio_file
-        return None
+        for user_id, audio_data in sink.audio_data.items():
+            # Buscar el usuario por ID en todos los guilds
+            user = None
+            for guild in bot.guilds:
+                user = guild.get_member(user_id)
+                if user:
+                    break
+            
+            if user:
+                participants.append(user.display_name)
+                
+                # Guardar archivo de audio individual del usuario
+                user_filename = f"{filename}_{user.display_name}_{user_id}.wav"
+                audio_data.save(user_filename)
+                audio_files.append(user_filename)
+        
+        if not audio_files:
+            await channel.send("⚠️ No se encontraron archivos de audio válidos.")
+            return
+        
+        # Combinar todos los archivos de audio
+        combined_audio = AudioSegment.empty()
+        
+        for audio_file in audio_files:
+            try:
+                audio_segment = AudioSegment.from_wav(audio_file)
+                combined_audio += audio_segment
+                # Limpiar archivo individual
+                os.remove(audio_file)
+            except Exception as e:
+                print(f"Error procesando {audio_file}: {e}")
+                continue
+        
+        if len(combined_audio) == 0:
+            await channel.send("⚠️ No se pudo procesar el audio grabado.")
+            return
+        
+        # Guardar archivo combinado
+        final_audio_file = f"{filename}_combined.wav"
+        combined_audio.export(final_audio_file, format="wav")
+        
+        await channel.send("🔄 Transcribiendo audio...")
+        
+        # Transcribir con Whisper
+        if whisper_model:
+            result = whisper_model.transcribe(final_audio_file, language="es")
+            transcript = result["text"].strip()
+            
+            if transcript:
+                # Crear documento de transcripción
+                doc_content = f"""# Transcripción de Conversación - Grabación Automática
+**Archivo**: {filename}
+**Fecha**: {time.strftime('%Y-%m-%d %H:%M:%S')}
+**Participantes**: {', '.join(participants)}
+**Duración**: {len(combined_audio)/1000:.1f} segundos
+
+---
+
+## Transcripción
+
+{transcript}
+
+---
+
+*Transcripción generada automáticamente usando Whisper AI*
+*Audio capturado directamente del canal de Discord*
+"""
+                
+                doc_filename = f"{filename}_transcripcion.md"
+                with open(doc_filename, 'w', encoding='utf-8') as f:
+                    f.write(doc_content)
+                
+                # Enviar el documento
+                with open(doc_filename, 'rb') as f:
+                    await channel.send(
+                        content="✅ **Grabación y transcripción completadas**",
+                        file=discord.File(f, doc_filename)
+                    )
+                
+                # También enviar el archivo de audio
+                with open(final_audio_file, 'rb') as f:
+                    await channel.send(
+                        content="🎵 **Archivo de audio grabado**",
+                        file=discord.File(f, final_audio_file)
+                    )
+                
+                if log_channel:
+                    await log_channel.send(f"📄 Grabación automática completada: {doc_filename}")
+                
+                # Limpiar archivos temporales
+                os.remove(doc_filename)
+                os.remove(final_audio_file)
+            else:
+                await channel.send("⚠️ No se pudo transcribir el audio (posiblemente silencio).")
+                # Enviar solo el archivo de audio
+                with open(final_audio_file, 'rb') as f:
+                    await channel.send(
+                        content="🎵 **Archivo de audio grabado** (sin transcripción)",
+                        file=discord.File(f, final_audio_file)
+                    )
+                os.remove(final_audio_file)
+        else:
+            await channel.send("❌ Modelo de transcripción no disponible.")
+            # Enviar solo el archivo de audio
+            with open(final_audio_file, 'rb') as f:
+                await channel.send(
+                    content="🎵 **Archivo de audio grabado** (sin transcripción)",
+                    file=discord.File(f, final_audio_file)
+                )
+            os.remove(final_audio_file)
+            
+    except Exception as e:
+        await channel.send(f"❌ Error procesando la grabación: {e}")
+        print(f"Error en recording_finished_callback: {e}")
+        import traceback
+        traceback.print_exc()
+    
+    finally:
+        # Limpiar datos de grabación
+        if guild_id in recording_data:
+            del recording_data[guild_id]
 
 
 @bot.command(name="conectar")
@@ -745,29 +865,44 @@ async def start_recording(ctx, servidor_nombre: str = None, *, nombre_archivo: s
         nombre_archivo = f"grabacion_{timestamp}"
     
     try:
-        recorder = SimpleAudioRecorder(nombre_archivo)
-        recorder.start_recording()
+        voice_client = voice_clients[target_guild.id]
+        
+        # Crear el sink de audio usando WaveSink
+        sink = discord.sinks.WaveSink()
+        
+        # Definir callback que funcione correctamente con el hilo de discord
+        def finished_callback(sink):
+            # Usar asyncio.run_coroutine_threadsafe para ejecutar el callback
+            future = asyncio.run_coroutine_threadsafe(
+                recording_finished_callback(sink, ctx.channel, nombre_archivo, target_guild.id),
+                bot.loop
+            )
+            
+        # Iniciar la grabación real con callback
+        voice_client.start_recording(sink, finished_callback)
         
         recording_data[target_guild.id] = {
-            'recorder': recorder,
+            'sink': sink,
             'filename': nombre_archivo,
             'start_time': time.time(),
             'channel': ctx.channel,
-            'guild': target_guild
+            'guild': target_guild,
+            'voice_client': voice_client
         }
         
-        channel_name = voice_clients[target_guild.id].channel.name
-        await ctx.send(f"🔴 **Grabación iniciada**: {nombre_archivo}")
+        channel_name = voice_client.channel.name
+        await ctx.send(f"🔴 **Grabación AUTOMÁTICA iniciada**: {nombre_archivo}")
         await ctx.send(f"📍 **Servidor**: {target_guild.name} - Canal: {channel_name}")
-        await ctx.send("⚠️ **Nota**: Esta es una versión básica. El bot está conectado al canal pero la grabación automática requiere permisos especiales del sistema.")
-        await ctx.send(f"Usa `!parar {target_guild.name}` para detener la grabación.")
-        await ctx.send("**Instrucciones**: Puedes usar software como OBS o Audacity para grabar el audio del canal y luego usar `!transcribir [archivo]` para procesarlo.")
+        await ctx.send("✅ **El bot está grabando automáticamente todo el audio del canal**")
+        await ctx.send(f"Usa `!parar {target_guild.name}` para detener la grabación y obtener la transcripción.")
+        await ctx.send("🎙️ **Habla normalmente** - El bot captura automáticamente todas las voces del canal.")
         
         if log_channel:
-            await log_channel.send(f"🎙️ Grabación iniciada por {ctx.author.name}: {nombre_archivo} en {target_guild.name}")
+            await log_channel.send(f"🎙️ Grabación automática iniciada por {ctx.author.name}: {nombre_archivo} en {target_guild.name}")
     
     except Exception as e:
         await ctx.send(f"❌ Error al iniciar la grabación: {e}")
+        print(f"Error detallado: {e}")
 
 
 @bot.command(name="parar")
@@ -809,18 +944,22 @@ async def stop_recording(ctx, *, servidor_nombre: str = None):
         return
     
     recording_info = recording_data[target_guild.id]
-    recording_info['recorder'].stop_recording()
+    voice_client = recording_info['voice_client']
+    
+    # Detener la grabación real
+    voice_client.stop_recording()
     
     duration = time.time() - recording_info['start_time']
-    await ctx.send(f"⏹️ **Grabación detenida** en {target_guild.name}")
+    await ctx.send(f"⏹️ **Grabación automática detenida** en {target_guild.name}")
     await ctx.send(f"📊 **Archivo**: {recording_info['filename']}")
     await ctx.send(f"⏱️ **Duración**: {duration:.1f} segundos")
-    await ctx.send("📁 Para transcribir un archivo de audio, usa: `!transcribir` y adjunta el archivo de audio.")
+    await ctx.send("🔄 **Procesando audio y generando transcripción...**")
+    await ctx.send("⏳ *Esto puede tomar unos minutos dependiendo de la duración del audio*")
     
-    del recording_data[target_guild.id]
+    # No eliminamos recording_data aquí porque lo hace el callback
     
     if log_channel:
-        await log_channel.send(f"⏹️ Grabación detenida por {ctx.author.name} en {target_guild.name}. Duración: {duration:.1f}s")
+        await log_channel.send(f"⏹️ Grabación automática detenida por {ctx.author.name} en {target_guild.name}. Duración: {duration:.1f}s")
 
 
 @bot.command(name="transcribir")
@@ -901,6 +1040,74 @@ async def transcribe_audio(ctx, *, nombre_salida: str = None):
             os.remove(audio_file)
         except:
             pass
+
+
+@bot.command(name="estado")
+async def recording_status(ctx):
+    """Muestra el estado actual de conexiones y grabaciones"""
+    if not await is_bot_admin(ctx):
+        await ctx.send(MSG_ADMIN_REQUIRED)
+        return
+    
+    embed = discord.Embed(
+        title="🤖 Estado del Bot de Grabación",
+        color=0x00ff00 if voice_clients else 0xff0000
+    )
+    
+    # Estado de conexiones de voz
+    if voice_clients:
+        connections = []
+        for guild_id, voice_client in voice_clients.items():
+            guild = bot.get_guild(guild_id)
+            if guild and voice_client.channel:
+                connections.append(f"🔊 **{guild.name}** - Canal: {voice_client.channel.name}")
+        
+        if connections:
+            embed.add_field(
+                name="Conexiones de Voz Activas",
+                value="\n".join(connections),
+                inline=False
+            )
+    else:
+        embed.add_field(
+            name="Conexiones de Voz",
+            value="❌ No conectado a ningún canal",
+            inline=False
+        )
+    
+    # Estado de grabaciones
+    if recording_data:
+        recordings = []
+        for guild_id, rec_info in recording_data.items():
+            guild = bot.get_guild(guild_id)
+            if guild:
+                duration = time.time() - rec_info['start_time']
+                recordings.append(f"🔴 **{guild.name}** - {rec_info['filename']} ({duration:.1f}s)")
+        
+        if recordings:
+            embed.add_field(
+                name="Grabaciones en Progreso",
+                value="\n".join(recordings),
+                inline=False
+            )
+    else:
+        embed.add_field(
+            name="Grabaciones",
+            value="⚫ No hay grabaciones activas",
+            inline=False
+        )
+    
+    # Estado del modelo Whisper
+    whisper_status = "✅ Disponible" if whisper_model else "❌ No disponible"
+    embed.add_field(
+        name="Transcripción (Whisper)",
+        value=whisper_status,
+        inline=True
+    )
+    
+    embed.set_footer(text=f"Bot conectado como {bot.user.name}")
+    
+    await ctx.send(embed=embed)
 
 
 bot.run(DISCORD_TOKEN)
