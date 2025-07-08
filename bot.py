@@ -571,62 +571,265 @@ async def support(ctx, *, message: str = None):
 
 
 
-async def recording_finished_callback(sink, channel, filename, guild_id):
+async def recording_finished_callback(sink, channel, filename, guild_id, sink_type="Unknown"):
     """Callback que se ejecuta cuando termina la grabación"""
     try:
-        await channel.send("🔄 Procesando audio grabado...")
+        await channel.send(f"🔄 Procesando audio grabado (Sink: {sink_type})...")
         
-        # WaveSink guarda archivos automáticamente, necesitamos acceder a ellos
-        if not hasattr(sink, 'audio_data') or not sink.audio_data:
-            await channel.send("⚠️ No se grabó ningún audio.")
-            return
+        # Diferentes tipos de sink manejan archivos de manera diferente
+        import glob
         
-        # Procesar archivos de audio individuales
-        participants = []
-        audio_files = []
+        print(f"Directorio de trabajo actual: {os.getcwd()}")
+        print(f"Archivos en directorio: {os.listdir('.')}")
+        print(f"Tipo de sink usado: {sink_type}")
         
-        for user_id, audio_data in sink.audio_data.items():
-            # Buscar el usuario por ID en todos los guilds
-            user = None
-            for guild in bot.guilds:
-                user = guild.get_member(user_id)
-                if user:
-                    break
+        # Verificar si el sink tiene audio_data disponible
+        if hasattr(sink, 'audio_data'):
+            print(f"Sink audio_data keys: {list(sink.audio_data.keys()) if sink.audio_data else 'None'}")
+            if sink.audio_data:
+                print(f"Número de usuarios con audio: {len(sink.audio_data)}")
+        
+        # Buscar archivos según el tipo de sink
+        if sink_type == "PCM":
+            # PCMSink puede crear archivos .pcm
+            generated_files = glob.glob("*.pcm") + glob.glob("*.wav")
+        else:
+            # WaveSink y otros crean archivos .wav
+            generated_files = glob.glob("*.wav")
             
-            if user:
-                participants.append(user.display_name)
-                
-                # Guardar archivo de audio individual del usuario
-                user_filename = f"{filename}_{user.display_name}_{user_id}.wav"
-                audio_data.save(user_filename)
-                audio_files.append(user_filename)
+        print(f"Archivos de audio encontrados: {generated_files}")
+        
+        audio_files = []
+        participants = []
+        
+        # Verificar si hay archivos de audio generados recientemente
+        current_time = time.time()
+        recent_files = []
+        
+        for file_path in generated_files:
+            try:
+                file_time = os.path.getmtime(file_path)
+                age = current_time - file_time
+                print(f"Archivo: {file_path}, edad: {age:.1f}s")
+                # Archivos creados en los últimos 120 segundos (más tiempo)
+                if age < 120:
+                    recent_files.append(file_path)
+            except Exception as e:
+                print(f"Error verificando {file_path}: {e}")
+                continue
+        
+        if recent_files:
+            # Renombrar archivos para incluir información del usuario
+            for i, file_path in enumerate(recent_files):
+                new_name = f"{filename}_user_{i+1}.wav"
+                try:
+                    os.rename(file_path, new_name)
+                    audio_files.append(new_name)
+                    participants.append(f"Usuario {i+1}")
+                    print(f"Archivo procesado: {file_path} -> {new_name}")
+                except Exception as e:
+                    print(f"Error renombrando {file_path}: {e}")
+        
+        # Si no encontramos archivos automáticos, intentar forzar la escritura del sink
+        if not audio_files and hasattr(sink, 'audio_data') and sink.audio_data:
+            print("Intentando forzar escritura de audio_data del sink...")
+            
+            for user_id, audio_data in sink.audio_data.items():
+                try:
+                    # Buscar el usuario por ID
+                    user = None
+                    for guild in bot.guilds:
+                        user = guild.get_member(user_id)
+                        if user:
+                            break
+                    
+                    user_name = user.display_name if user else f"User_{user_id}"
+                    participants.append(user_name)
+                    
+                    user_filename = f"{filename}_{user_name}_{user_id}.wav"
+                    print(f"Intentando guardar audio para {user_name} en {user_filename}")
+                    
+                    # Verificar el estado del AudioData
+                    print(f"AudioData para {user_name}: {type(audio_data)}")
+                    if hasattr(audio_data, 'file'):
+                        print(f"  - Tiene file: {audio_data.file}")
+                    
+                    # Intentar diferentes métodos de escritura
+                    try:
+                        audio_data.write(user_filename)
+                        if os.path.exists(user_filename) and os.path.getsize(user_filename) > 0:
+                            audio_files.append(user_filename)
+                            print(f"  ✅ Audio guardado exitosamente para {user_name}")
+                        else:
+                            print(f"  ❌ Archivo creado pero está vacío para {user_name}")
+                    except Exception as write_error:
+                        print(f"  ❌ Error en write(): {write_error}")
+                        
+                        # Método alternativo: verificar si ya existe un archivo
+                        if hasattr(audio_data, 'file') and audio_data.file and hasattr(audio_data.file, 'name'):
+                            source_file = audio_data.file.name
+                            if os.path.exists(source_file):
+                                import shutil
+                                try:
+                                    shutil.copy2(source_file, user_filename)
+                                    audio_files.append(user_filename)
+                                    print(f"  ✅ Audio copiado desde {source_file} para {user_name}")
+                                except Exception as copy_error:
+                                    print(f"  ❌ Error copiando: {copy_error}")
+                        
+                except Exception as e:
+                    print(f"Error general procesando usuario {user_id}: {e}")
+                    continue
+                    
+        # Si aún no hay archivos, buscar por patrones comunes
+        if not audio_files:
+            print("Buscando archivos de audio con patrones comunes...")
+            
+            # Patrones que pueden usar diferentes sinks
+            patterns = [
+                f"{filename}*.wav",
+                f"*{filename}*.wav", 
+                f"*{int(time.time())}*.wav",
+                "user_*.wav",
+                "*_*.wav",
+                "*.wav"  # Buscar CUALQUIER archivo WAV
+            ]
+            
+            for pattern in patterns:
+                found_files = glob.glob(pattern)
+                print(f"Patrón '{pattern}' encontró: {found_files}")
+                for file_path in found_files:
+                    try:
+                        file_time = os.path.getmtime(file_path)
+                        age = current_time - file_time
+                        print(f"  - {file_path}: {age:.1f}s de antigüedad")
+                        # Archivos creados en los últimos 300 segundos (5 minutos)
+                        if age < 300:
+                            new_name = f"{filename}_found_{len(audio_files)}.wav"
+                            os.rename(file_path, new_name)
+                            audio_files.append(new_name)
+                            participants.append(f"Participante {len(audio_files)}")
+                            print(f"  ✅ Archivo encontrado: {file_path} -> {new_name}")
+                    except Exception as e:
+                        print(f"  ❌ Error procesando {file_path}: {e}")
+                        continue
+        
+        # Como último recurso, crear un archivo de audio vacío para evitar errores
+        if not audio_files:
+            print("No se encontraron archivos de audio. Creando archivo de prueba...")
+            try:
+                # Crear un archivo de audio silencioso de 1 segundo como fallback
+                from pydub import AudioSegment
+                silence = AudioSegment.silent(duration=1000)  # 1 segundo de silencio
+                test_file = f"{filename}_silence.wav"
+                silence.export(test_file, format="wav")
+                audio_files.append(test_file)
+                participants.append("Sin audio detectado")
+                await channel.send("⚠️ No se detectó audio en la grabación. Generando archivo de prueba.")
+            except Exception as e:
+                print(f"Error creando archivo de prueba: {e}")
         
         if not audio_files:
             await channel.send("⚠️ No se encontraron archivos de audio válidos.")
             return
         
-        # Combinar todos los archivos de audio
-        combined_audio = AudioSegment.empty()
+        # Procesar archivos según el tipo
+        if len(audio_files) == 1:
+            final_audio_file = audio_files[0]
+            
+            # Si es archivo PCM, convertir a WAV
+            if final_audio_file.endswith('.pcm'):
+                try:
+                    print(f"Convirtiendo archivo PCM a WAV: {final_audio_file}")
+                    # Leer datos PCM y convertir a WAV
+                    with open(final_audio_file, 'rb') as pcm_file:
+                        pcm_data = pcm_file.read()
+                    
+                    # Crear AudioSegment desde datos PCM raw
+                    audio_segment = AudioSegment.from_raw(
+                        io.BytesIO(pcm_data),
+                        sample_width=2,  # 16-bit
+                        frame_rate=48000,  # Discord rate
+                        channels=2  # Estéreo
+                    )
+                    
+                    new_name = f"{filename}_converted.wav"
+                    audio_segment.export(new_name, format="wav")
+                    os.remove(final_audio_file)  # Limpiar archivo PCM
+                    final_audio_file = new_name
+                    print(f"Conversión exitosa: {new_name}")
+                    
+                except Exception as convert_error:
+                    print(f"Error convirtiendo PCM: {convert_error}")
+                    # Intentar con diferentes parámetros
+                    try:
+                        audio_segment = AudioSegment.from_raw(
+                            io.BytesIO(pcm_data),
+                            sample_width=2,
+                            frame_rate=48000,
+                            channels=1  # Mono
+                        )
+                        new_name = f"{filename}_converted_mono.wav"
+                        audio_segment.export(new_name, format="wav")
+                        os.remove(final_audio_file)
+                        final_audio_file = new_name
+                        print(f"Conversión mono exitosa: {new_name}")
+                    except Exception as e2:
+                        print(f"Error en conversión mono: {e2}")
+                        await channel.send(f"⚠️ Error convirtiendo archivo PCM: {convert_error}")
+                        return
+            else:
+                # Renombrar archivo WAV para mantener consistencia
+                new_name = f"{filename}_combined.wav"
+                os.rename(final_audio_file, new_name)
+                final_audio_file = new_name
+                
+        else:
+            # Combinar múltiples archivos de audio
+            combined_audio = AudioSegment.empty()
+            
+            for audio_file in audio_files:
+                try:
+                    if audio_file.endswith('.pcm'):
+                        # Convertir PCM a AudioSegment
+                        with open(audio_file, 'rb') as pcm_file:
+                            pcm_data = pcm_file.read()
+                        audio_segment = AudioSegment.from_raw(
+                            io.BytesIO(pcm_data),
+                            sample_width=2,
+                            frame_rate=48000,
+                            channels=2
+                        )
+                    else:
+                        audio_segment = AudioSegment.from_wav(audio_file)
+                    
+                    combined_audio += audio_segment
+                    # Limpiar archivo individual
+                    os.remove(audio_file)
+                except Exception as e:
+                    print(f"Error procesando {audio_file}: {e}")
+                    continue
+            
+            if len(combined_audio) == 0:
+                await channel.send("⚠️ No se pudo procesar el audio grabado.")
+                return
+            
+            # Guardar archivo combinado
+            final_audio_file = f"{filename}_combined.wav"
+            combined_audio.export(final_audio_file, format="wav")
         
-        for audio_file in audio_files:
-            try:
-                audio_segment = AudioSegment.from_wav(audio_file)
-                combined_audio += audio_segment
-                # Limpiar archivo individual
-                os.remove(audio_file)
-            except Exception as e:
-                print(f"Error procesando {audio_file}: {e}")
-                continue
-        
-        if len(combined_audio) == 0:
-            await channel.send("⚠️ No se pudo procesar el audio grabado.")
+        # Verificar que el archivo final existe
+        if not os.path.exists(final_audio_file):
+            await channel.send("⚠️ Error: No se pudo crear el archivo de audio final.")
             return
         
-        # Guardar archivo combinado
-        final_audio_file = f"{filename}_combined.wav"
-        combined_audio.export(final_audio_file, format="wav")
-        
         await channel.send("🔄 Transcribiendo audio...")
+        
+        # Calcular duración del audio final
+        try:
+            audio_duration = AudioSegment.from_wav(final_audio_file).duration_seconds
+        except:
+            audio_duration = 0
         
         # Transcribir con Whisper
         if whisper_model:
@@ -639,7 +842,7 @@ async def recording_finished_callback(sink, channel, filename, guild_id):
 **Archivo**: {filename}
 **Fecha**: {time.strftime('%Y-%m-%d %H:%M:%S')}
 **Participantes**: {', '.join(participants)}
-**Duración**: {len(combined_audio)/1000:.1f} segundos
+**Duración**: {audio_duration:.1f} segundos
 
 ---
 
@@ -867,22 +1070,43 @@ async def start_recording(ctx, servidor_nombre: str = None, *, nombre_archivo: s
     try:
         voice_client = voice_clients[target_guild.id]
         
-        # Crear el sink de audio usando WaveSink
-        sink = discord.sinks.WaveSink()
+        # Intentar con diferentes tipos de sink para mayor compatibilidad
+        try:
+            # Intentar primero con PCMSink que es más básico
+            sink = discord.sinks.PCMSink()
+            sink_type = "PCM"
+        except Exception as e:
+            print(f"No se pudo crear PCMSink: {e}, intentando WaveSink")
+            try:
+                sink = discord.sinks.WaveSink()
+                sink_type = "WAV"
+            except Exception as e2:
+                print(f"No se pudo crear WaveSink: {e2}, usando sink básico")
+                # Crear un sink personalizado más simple
+                sink = discord.sinks.Sink()
+                sink_type = "Basic"
         
-        # Definir callback que funcione correctamente con el hilo de discord
-        def finished_callback(sink):
-            # Usar asyncio.run_coroutine_threadsafe para ejecutar el callback
-            future = asyncio.run_coroutine_threadsafe(
-                recording_finished_callback(sink, ctx.channel, nombre_archivo, target_guild.id),
-                bot.loop
-            )
+        print(f"Usando sink tipo: {sink_type}")
+        
+        # Crear un callback async simple que maneja errores
+        async def simple_callback(sink, exc=None):
+            if exc:
+                print(f"Error en callback de grabación: {exc}")
+            # No hacer más nada - manejaremos el procesamiento manualmente en !parar
+            pass
             
-        # Iniciar la grabación real con callback
-        voice_client.start_recording(sink, finished_callback)
+        # Iniciar la grabación con manejo de errores
+        try:
+            voice_client.start_recording(sink, simple_callback)
+            await ctx.send(f"✅ Grabación iniciada con sink {sink_type}")
+        except Exception as record_error:
+            await ctx.send(f"❌ Error iniciando grabación: {record_error}")
+            print(f"Error detallado al iniciar grabación: {record_error}")
+            return
         
         recording_data[target_guild.id] = {
             'sink': sink,
+            'sink_type': sink_type,
             'filename': nombre_archivo,
             'start_time': time.time(),
             'channel': ctx.channel,
@@ -945,18 +1169,27 @@ async def stop_recording(ctx, *, servidor_nombre: str = None):
     
     recording_info = recording_data[target_guild.id]
     voice_client = recording_info['voice_client']
+    sink = recording_info['sink']
+    sink_type = recording_info.get('sink_type', 'Unknown')
+    filename = recording_info['filename']
     
     # Detener la grabación real
-    voice_client.stop_recording()
+    try:
+        voice_client.stop_recording()
+        await ctx.send(f"⏹️ **Grabación automática detenida** en {target_guild.name}")
+    except Exception as stop_error:
+        await ctx.send(f"⚠️ **Error deteniendo grabación**: {stop_error}")
+        print(f"Error deteniendo grabación: {stop_error}")
     
     duration = time.time() - recording_info['start_time']
-    await ctx.send(f"⏹️ **Grabación automática detenida** en {target_guild.name}")
-    await ctx.send(f"📊 **Archivo**: {recording_info['filename']}")
+    await ctx.send(f"📊 **Archivo**: {filename}")
     await ctx.send(f"⏱️ **Duración**: {duration:.1f} segundos")
-    await ctx.send("🔄 **Procesando audio y generando transcripción...**")
+    await ctx.send(f"🔄 **Procesando audio con sink {sink_type}...**")
     await ctx.send("⏳ *Esto puede tomar unos minutos dependiendo de la duración del audio*")
     
-    # No eliminamos recording_data aquí porque lo hace el callback
+    # Procesar el audio directamente aquí
+    await asyncio.sleep(3)  # Dar más tiempo a que se finalice la grabación
+    await recording_finished_callback(sink, ctx.channel, filename, target_guild.id, sink_type)
     
     if log_channel:
         await log_channel.send(f"⏹️ Grabación automática detenida por {ctx.author.name} en {target_guild.name}. Duración: {duration:.1f}s")
