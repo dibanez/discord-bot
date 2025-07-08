@@ -665,17 +665,64 @@ async def recording_finished_callback(sink, channel, filename, guild_id, sink_ty
                     except Exception as write_error:
                         print(f"  ❌ Error en write(): {write_error}")
                         
-                        # Método alternativo: verificar si ya existe un archivo
-                        if hasattr(audio_data, 'file') and audio_data.file and hasattr(audio_data.file, 'name'):
-                            source_file = audio_data.file.name
-                            if os.path.exists(source_file):
-                                import shutil
-                                try:
-                                    shutil.copy2(source_file, user_filename)
-                                    audio_files.append(user_filename)
-                                    print(f"  ✅ Audio copiado desde {source_file} para {user_name}")
-                                except Exception as copy_error:
-                                    print(f"  ❌ Error copiando: {copy_error}")
+                        # Método alternativo: extraer datos directamente del BytesIO
+                        if hasattr(audio_data, 'file') and audio_data.file:
+                            try:
+                                print(f"  🔄 Intentando extraer datos de BytesIO para {user_name}")
+                                
+                                # Obtener datos del BytesIO
+                                audio_data.file.seek(0)  # Ir al inicio
+                                raw_data = audio_data.file.read()
+                                
+                                if raw_data and len(raw_data) > 0:
+                                    print(f"  📊 Datos extraídos: {len(raw_data)} bytes")
+                                    
+                                    # Guardar como archivo PCM primero
+                                    pcm_filename = f"{filename}_{user_name}_{user_id}.pcm"
+                                    with open(pcm_filename, 'wb') as pcm_file:
+                                        pcm_file.write(raw_data)
+                                    
+                                    # Convertir PCM a WAV usando pydub
+                                    try:
+                                        from pydub import AudioSegment
+                                        audio_segment = AudioSegment.from_raw(
+                                            io.BytesIO(raw_data),
+                                            sample_width=2,  # 16-bit
+                                            frame_rate=48000,  # Discord rate
+                                            channels=2  # Estéreo
+                                        )
+                                        audio_segment.export(user_filename, format="wav")
+                                        audio_files.append(user_filename)
+                                        print(f"  ✅ Audio extraído y convertido para {user_name}")
+                                        
+                                        # Limpiar archivo PCM temporal
+                                        os.remove(pcm_filename)
+                                        
+                                    except Exception as convert_error:
+                                        print(f"  ⚠️ Error convirtiendo estéreo, intentando mono: {convert_error}")
+                                        try:
+                                            # Intentar con mono
+                                            from pydub import AudioSegment
+                                            audio_segment = AudioSegment.from_raw(
+                                                io.BytesIO(raw_data),
+                                                sample_width=2,
+                                                frame_rate=48000,
+                                                channels=1  # Mono
+                                            )
+                                            audio_segment.export(user_filename, format="wav")
+                                            audio_files.append(user_filename)
+                                            print(f"  ✅ Audio extraído y convertido (mono) para {user_name}")
+                                            os.remove(pcm_filename)
+                                        except Exception as mono_error:
+                                            print(f"  ❌ Error en conversión mono: {mono_error}")
+                                            # Mantener archivo PCM como fallback
+                                            audio_files.append(pcm_filename)
+                                            print(f"  💾 Manteniendo archivo PCM para {user_name}")
+                                else:
+                                    print(f"  ❌ BytesIO está vacío para {user_name}")
+                                    
+                            except Exception as bytesio_error:
+                                print(f"  ❌ Error extrayendo de BytesIO: {bytesio_error}")
                         
                 except Exception as e:
                     print(f"Error general procesando usuario {user_id}: {e}")
@@ -746,6 +793,7 @@ async def recording_finished_callback(sink, channel, filename, guild_id, sink_ty
                         pcm_data = pcm_file.read()
                     
                     # Crear AudioSegment desde datos PCM raw
+                    from pydub import AudioSegment
                     audio_segment = AudioSegment.from_raw(
                         io.BytesIO(pcm_data),
                         sample_width=2,  # 16-bit
@@ -763,6 +811,7 @@ async def recording_finished_callback(sink, channel, filename, guild_id, sink_ty
                     print(f"Error convirtiendo PCM: {convert_error}")
                     # Intentar con diferentes parámetros
                     try:
+                        from pydub import AudioSegment
                         audio_segment = AudioSegment.from_raw(
                             io.BytesIO(pcm_data),
                             sample_width=2,
@@ -786,10 +835,12 @@ async def recording_finished_callback(sink, channel, filename, guild_id, sink_ty
                 
         else:
             # Combinar múltiples archivos de audio
+            from pydub import AudioSegment
             combined_audio = AudioSegment.empty()
             
             for audio_file in audio_files:
                 try:
+                    from pydub import AudioSegment
                     if audio_file.endswith('.pcm'):
                         # Convertir PCM a AudioSegment
                         with open(audio_file, 'rb') as pcm_file:
@@ -827,6 +878,7 @@ async def recording_finished_callback(sink, channel, filename, guild_id, sink_ty
         
         # Calcular duración del audio final
         try:
+            from pydub import AudioSegment
             audio_duration = AudioSegment.from_wav(final_audio_file).duration_seconds
         except:
             audio_duration = 0
