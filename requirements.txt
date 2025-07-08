@@ -1,4 +1,9 @@
-discord.py
+discord.py[voice]
 gspread
 oauth2client
 python-dotenv
+PyNaCl
+openai-whisper
+pydub
+ffmpeg-python
+py-cord[voice]
