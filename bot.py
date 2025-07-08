@@ -912,44 +912,52 @@ async def recording_finished_callback(sink, channel, filename, guild_id, sink_ty
                 with open(doc_filename, 'w', encoding='utf-8') as f:
                     f.write(doc_content)
                 
-                # Enviar el documento
-                with open(doc_filename, 'rb') as f:
-                    await channel.send(
-                        content="✅ **Grabación y transcripción completadas**",
-                        file=discord.File(f, doc_filename)
-                    )
+                # Crear carpeta de grabaciones si no existe
+                recordings_dir = os.path.join(os.getcwd(), "recordings")
+                if not os.path.exists(recordings_dir):
+                    os.makedirs(recordings_dir)
                 
-                # También enviar el archivo de audio
-                with open(final_audio_file, 'rb') as f:
-                    await channel.send(
-                        content="🎵 **Archivo de audio grabado**",
-                        file=discord.File(f, final_audio_file)
-                    )
+                # Mover archivos a la carpeta de grabaciones
+                saved_doc_path = os.path.join(recordings_dir, doc_filename)
+                saved_audio_path = os.path.join(recordings_dir, final_audio_file)
+                
+                # Mover archivos
+                os.rename(doc_filename, saved_doc_path)
+                os.rename(final_audio_file, saved_audio_path)
+                
+                await channel.send(f"✅ **Grabación y transcripción completadas**")
+                await channel.send(f"📁 **Archivos guardados en:** `recordings/{doc_filename}` y `recordings/{final_audio_file}`")
                 
                 if log_channel:
-                    await log_channel.send(f"📄 Grabación automática completada: {doc_filename}")
+                    await log_channel.send(f"📄 Grabación automática completada y guardada: {saved_doc_path}")
                 
-                # Limpiar archivos temporales
-                os.remove(doc_filename)
-                os.remove(final_audio_file)
+                # No eliminar archivos - mantenerlos en la carpeta recordings
             else:
                 await channel.send("⚠️ No se pudo transcribir el audio (posiblemente silencio).")
-                # Enviar solo el archivo de audio
-                with open(final_audio_file, 'rb') as f:
-                    await channel.send(
-                        content="🎵 **Archivo de audio grabado** (sin transcripción)",
-                        file=discord.File(f, final_audio_file)
-                    )
-                os.remove(final_audio_file)
+                
+                # Crear carpeta de grabaciones si no existe
+                recordings_dir = os.path.join(os.getcwd(), "recordings")
+                if not os.path.exists(recordings_dir):
+                    os.makedirs(recordings_dir)
+                
+                # Mover archivo de audio a la carpeta de grabaciones
+                saved_audio_path = os.path.join(recordings_dir, final_audio_file)
+                os.rename(final_audio_file, saved_audio_path)
+                
+                await channel.send(f"📁 **Archivo de audio guardado en:** `recordings/{final_audio_file}` (sin transcripción)")
         else:
             await channel.send("❌ Modelo de transcripción no disponible.")
-            # Enviar solo el archivo de audio
-            with open(final_audio_file, 'rb') as f:
-                await channel.send(
-                    content="🎵 **Archivo de audio grabado** (sin transcripción)",
-                    file=discord.File(f, final_audio_file)
-                )
-            os.remove(final_audio_file)
+            
+            # Crear carpeta de grabaciones si no existe
+            recordings_dir = os.path.join(os.getcwd(), "recordings")
+            if not os.path.exists(recordings_dir):
+                os.makedirs(recordings_dir)
+            
+            # Mover archivo de audio a la carpeta de grabaciones
+            saved_audio_path = os.path.join(recordings_dir, final_audio_file)
+            os.rename(final_audio_file, saved_audio_path)
+            
+            await channel.send(f"📁 **Archivo de audio guardado en:** `recordings/{final_audio_file}` (sin transcripción)")
             
     except Exception as e:
         await channel.send(f"❌ Error procesando la grabación: {e}")
@@ -1300,16 +1308,20 @@ async def transcribe_audio(ctx, *, nombre_salida: str = None):
                 with open(doc_filename, 'w', encoding='utf-8') as f:
                     f.write(doc_content)
                 
-                with open(doc_filename, 'rb') as f:
-                    await ctx.send(
-                        content="✅ **Transcripción completada**",
-                        file=discord.File(f, doc_filename)
-                    )
+                # Crear carpeta de grabaciones si no existe
+                recordings_dir = os.path.join(os.getcwd(), "recordings")
+                if not os.path.exists(recordings_dir):
+                    os.makedirs(recordings_dir)
+                
+                # Mover archivo de transcripción a la carpeta de grabaciones
+                saved_doc_path = os.path.join(recordings_dir, doc_filename)
+                os.rename(doc_filename, saved_doc_path)
+                
+                await ctx.send("✅ **Transcripción completada**")
+                await ctx.send(f"📁 **Archivo guardado en:** `recordings/{doc_filename}`")
                 
                 if log_channel:
-                    await log_channel.send(f"📄 Transcripción generada por {ctx.author.name}: {doc_filename}")
-                
-                os.remove(doc_filename)
+                    await log_channel.send(f"📄 Transcripción generada por {ctx.author.name} y guardada: {saved_doc_path}")
             else:
                 await ctx.send("⚠️ No se pudo transcribir el audio (posiblemente silencio o audio no reconocible).")
         else:
