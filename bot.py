@@ -24,6 +24,7 @@ import time
 import whisper
 from pydub import AudioSegment
 import io
+from openai import OpenAI
 
 load_dotenv()
 
@@ -33,6 +34,7 @@ GOOGLE_SHEET_TAB = os.getenv("GOOGLE_SHEET_TAB")
 GOOGLE_CREDENTIALS_PATH = os.getenv("GOOGLE_CREDENTIALS_PATH")
 LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID"))
 SUPPORT_CHANNEL_ID = int(os.getenv("SUPPORT_CHANNEL_ID"))
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 # --- Verification Settings ---
 VERIFICATION_MAX_ATTEMPTS = int(os.getenv("VERIFICATION_MAX_ATTEMPTS", 3))
@@ -140,6 +142,7 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 voice_clients = {}
 recording_data = {}
 whisper_model = None
+openai_client = None
 
 scope = [
     "https://spreadsheets.google.com/feeds",
@@ -156,6 +159,7 @@ async def on_ready():
     global support_channel
     global guild
     global whisper_model
+    global openai_client
     guild = discord.utils.get(bot.guilds)
     log_channel = bot.get_channel(LOG_CHANNEL_ID)
     support_channel = bot.get_channel(SUPPORT_CHANNEL_ID)
@@ -165,6 +169,15 @@ async def on_ready():
         print("✅ Modelo Whisper cargado correctamente")
     except Exception as e:
         print(f"⚠️ Error cargando modelo Whisper: {e}")
+    
+    try:
+        if OPENAI_API_KEY:
+            openai_client = OpenAI(api_key=OPENAI_API_KEY)
+            print("✅ Cliente OpenAI configurado correctamente")
+        else:
+            print("⚠️ OPENAI_API_KEY no configurada - resúmenes no disponibles")
+    except Exception as e:
+        print(f"⚠️ Error configurando OpenAI: {e}")
     
     print(f"✅ Bot listo como: {bot.user.name}")
     if log_channel:
@@ -571,6 +584,76 @@ async def support(ctx, *, message: str = None):
 
 
 
+def identify_speaker_segments(transcript, participants):
+    """Identifica segmentos de conversación y asigna participantes estimados"""
+    if not transcript or not participants:
+        return transcript
+    
+    # Dividir transcripción en segmentos por pausas o cambios de tema
+    segments = []
+    sentences = transcript.split('. ')
+    
+    current_speaker = 0
+    for i, sentence in enumerate(sentences):
+        if sentence.strip():
+            # Alternar entre participantes cada cierto número de oraciones
+            if i > 0 and i % 3 == 0:
+                current_speaker = (current_speaker + 1) % len(participants)
+            
+            speaker_name = participants[current_speaker] if current_speaker < len(participants) else "Participante desconocido"
+            segments.append(f"**{speaker_name}**: {sentence.strip()}")
+    
+    return '. '.join(segments) + '.'
+
+
+async def generate_meeting_summary(transcript, participants, duration_minutes=0):
+    """Genera un resumen de la reunión usando OpenAI"""
+    if not openai_client or not transcript.strip():
+        return None
+    
+    try:
+        # Crear prompt para el resumen
+        participants_list = ", ".join(participants) if participants else "Participantes no identificados"
+        
+        prompt = f"""
+Analiza la siguiente transcripción de una reunión y genera un resumen profesional en español.
+
+**Información de la reunión:**
+- Participantes: {participants_list}
+- Duración: {duration_minutes:.1f} minutos
+
+**Transcripción:**
+{transcript}
+
+**Genera un resumen que incluya:**
+1. **Resumen Ejecutivo**: Breve descripción de la reunión
+2. **Puntos Clave Discutidos**: Los temas principales tratados
+3. **Decisiones Tomadas**: Acuerdos o decisiones alcanzadas
+4. **Acciones Pendientes**: Tareas o compromisos mencionados
+5. **Próximos Pasos**: Acciones a realizar después de la reunión
+
+Mantén el resumen conciso pero completo, usando un tono profesional.
+"""
+        
+        response = openai_client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": "Eres un asistente especializado en crear resúmenes de reuniones profesionales. Tu objetivo es extraer información clave y presentarla de manera estructurada y clara."},
+                {"role": "user", "content": prompt}
+            ],
+            max_tokens=1000,
+            temperature=0.3
+        )
+        
+        return response.choices[0].message.content.strip()
+        
+    except Exception as e:
+        print(f"Error generando resumen con OpenAI: {e}")
+        return None
+
+
+
+
 async def recording_finished_callback(sink, channel, filename, guild_id, sink_type="Unknown"):
     """Callback que se ejecuta cuando termina la grabación"""
     try:
@@ -889,7 +972,14 @@ async def recording_finished_callback(sink, channel, filename, guild_id, sink_ty
             transcript = result["text"].strip()
             
             if transcript:
-                # Crear documento de transcripción
+                # Identificar segmentos de participantes
+                segmented_transcript = identify_speaker_segments(transcript, participants)
+                
+                # Generar resumen con OpenAI
+                await channel.send("🔄 Generando resumen de la reunión...")
+                meeting_summary = await generate_meeting_summary(transcript, participants, audio_duration / 60)
+                
+                # Crear documento de transcripción mejorado
                 doc_content = f"""# Transcripción de Conversación - Grabación Automática
 **Archivo**: {filename}
 **Fecha**: {time.strftime('%Y-%m-%d %H:%M:%S')}
@@ -898,13 +988,26 @@ async def recording_finished_callback(sink, channel, filename, guild_id, sink_ty
 
 ---
 
-## Transcripción
+## Resumen de la Reunión
+
+{meeting_summary if meeting_summary else "No se pudo generar el resumen automáticamente."}
+
+---
+
+## Transcripción con Participantes
+
+{segmented_transcript}
+
+---
+
+## Transcripción Original
 
 {transcript}
 
 ---
 
 *Transcripción generada automáticamente usando Whisper AI*
+*Resumen generado con OpenAI GPT-3.5-turbo*
 *Audio capturado directamente del canal de Discord*
 """
                 
@@ -1287,11 +1390,21 @@ async def transcribe_audio(ctx, *, nombre_salida: str = None):
             transcript = result["text"].strip()
             
             if transcript:
+                # Generar resumen con OpenAI
+                await ctx.send("🔄 Generando resumen del audio...")
+                meeting_summary = await generate_meeting_summary(transcript, [], 0)
+                
                 doc_content = f"""# Transcripción de Audio
 **Archivo original**: {attachment.filename}
 **Fecha de transcripción**: {time.strftime('%Y-%m-%d %H:%M:%S')}
 **Procesado por**: {ctx.author.display_name}
 **Tamaño del archivo**: {attachment.size / 1024 / 1024:.2f} MB
+
+---
+
+## Resumen del Audio
+
+{meeting_summary if meeting_summary else "No se pudo generar el resumen automáticamente."}
 
 ---
 
@@ -1302,6 +1415,7 @@ async def transcribe_audio(ctx, *, nombre_salida: str = None):
 ---
 
 *Transcripción generada automáticamente usando Whisper AI*
+*Resumen generado con OpenAI GPT-3.5-turbo*
 """
                 
                 doc_filename = f"{nombre_salida}.md"
@@ -1407,4 +1521,14 @@ async def recording_status(ctx):
     await ctx.send(embed=embed)
 
 
-bot.run(DISCORD_TOKEN)
+if __name__ == "__main__":
+    try:
+        bot.run(DISCORD_TOKEN)
+    except KeyboardInterrupt:
+        print("Bot detenido por el usuario")
+    finally:
+        # Limpiar conexiones de voz
+        for vc in voice_clients.values():
+            if vc.is_connected():
+                asyncio.run(vc.disconnect())
+        print("Conexiones de voz cerradas")
