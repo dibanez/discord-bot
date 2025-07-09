@@ -6,3 +6,4 @@ PyNaCl
 openai-whisper
 pydub
 ffmpeg-python
+openai
