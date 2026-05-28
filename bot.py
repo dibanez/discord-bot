@@ -38,34 +38,43 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 # --- Verification Settings ---
 VERIFICATION_MAX_ATTEMPTS = int(os.getenv("VERIFICATION_MAX_ATTEMPTS", 3))
+COMUNIDAD_ROLE_NAME = os.getenv("COMUNIDAD_ROLE_NAME", "Comunidad")
 
 # --- Configurable Messages ---
 # On Member Join
 MSG_MEMBER_JOIN_WELCOME = os.getenv(
     "MSG_MEMBER_JOIN_WELCOME",
     "👋 ¡Bienvenido al servidor de ANFAIA!\n\n"
-    "Para poder acceder al resto del servidor, por favor **responde a este mensaje escribiendo únicamente la clave** que se te ha facilitado con la invitación.\n"
-    "🔑 *Es importante que la pongas tal cual la recibiste, sin modificar nada.*\n\n"
-    "Si tienes algún problema con la clave o necesitas ayuda, **escribe el comando `!soporte` seguido de tu mensaje aquí mismo, en este chat privado con el bot**.\n\n"
+    "Para completar tu acceso, por favor **responde a este mensaje escribiendo tu nombre completo** (nombre y apellidos).\n"
+    "📝 *Lo usaremos como tu apodo en el servidor para que todos podamos identificarte.*\n\n"
+    "Si necesitas ayuda, **escribe el comando `!soporte` seguido de tu mensaje aquí mismo, en este chat privado con el bot**.\n\n"
     "Por ejemplo:\n"
-    "`!soporte No he recibido la clave y no puedo acceder al servidor.`\n\n"
+    "`!soporte Tengo un problema para acceder al servidor.`\n\n"
     "Un administrador revisará tu mensaje y te responderá lo antes posible.\n\n"
     "¡Gracias por unirte a la Asociación Nacional Faro para la Aceleración de la Inteligencia Artificial!",
 )
 MSG_MEMBER_JOIN_TIMEOUT = os.getenv(
     "MSG_MEMBER_JOIN_TIMEOUT",
-    "⏰ Se acabó el tiempo para introducir la clave. Si necesitas ayuda, usa `!soporte` o contacta a un administrador.",
+    "⏰ Se acabó el tiempo para indicar tu nombre. Si necesitas ayuda, usa `!soporte` o contacta a un administrador.",
 )
 MSG_MEMBER_JOIN_ERROR = os.getenv(
-    "MSG_MEMBER_JOIN_ERROR", "⚠️ Hubo un error al procesar tu verificación."
+    "MSG_MEMBER_JOIN_ERROR", "⚠️ Hubo un error al procesar tu registro."
 )
-MSG_VERIFY_RETRY_PROMPT = os.getenv(
-    "MSG_VERIFY_RETRY_PROMPT",
-    "❌ Clave incorrecta. Te quedan {attempts_left} intento(s). Por favor, inténtalo de nuevo:",
+MSG_NAME_INVALID_RETRY = os.getenv(
+    "MSG_NAME_INVALID_RETRY",
+    "❌ El nombre indicado no es válido (debe tener al menos 2 caracteres y no superar los 32). Te quedan {attempts_left} intento(s). Por favor, escribe tu nombre completo:",
 )
-MSG_VERIFY_NO_ATTEMPTS_LEFT = os.getenv(
-    "MSG_VERIFY_NO_ATTEMPTS_LEFT",
+MSG_NAME_NO_ATTEMPTS_LEFT = os.getenv(
+    "MSG_NAME_NO_ATTEMPTS_LEFT",
     "❌ Has agotado todos tus intentos. Por favor, contacta con un administrador o usa el comando `!soporte` si necesitas ayuda.",
+)
+MSG_NAME_SUCCESS = os.getenv(
+    "MSG_NAME_SUCCESS",
+    "✅ ¡Gracias, {nombre}! Te he asignado el rol `{rol_nombre}` y ya tienes acceso al servidor.",
+)
+MSG_NAME_ROLE_NOT_FOUND = os.getenv(
+    "MSG_NAME_ROLE_NOT_FOUND",
+    "⚠️ He guardado tu nombre, pero no se encontró el rol `{rol_nombre}`. Un administrador lo revisará.",
 )
 
 # Key Verification (_verify_member_key)
@@ -341,77 +350,112 @@ async def on_member_join(member):
 
         attempts_left = VERIFICATION_MAX_ATTEMPTS
         while attempts_left > 0:
-
-            def check(m):
-                return m.author == member and isinstance(m.channel, discord.DMChannel)
-
             try:
-                # The prompt to enter the key is the welcome message (first attempt)
-                # or the retry message (subsequent attempts).
-                msg = await bot.wait_for(
-                    "message", check=check, timeout=540.0
-                )  # 540 seconds timeout
+                msg = await bot.wait_for("message", check=check, timeout=540.0)
             except asyncio.TimeoutError:
-                # Using existing timeout message, but log attempt context
-                timeout_message_to_send = (
-                    MSG_MEMBER_JOIN_TIMEOUT  # Default timeout message
-                )
-                if (
-                    VERIFICATION_MAX_ATTEMPTS - attempts_left > 0
-                ):  # Not the first attempt
-                    timeout_message_to_send = (
-                        MSG_MEMBER_JOIN_TIMEOUT + " (Intento agotado)"
-                    )
-
                 try:
-                    await member.send(timeout_message_to_send)
+                    await member.send(MSG_MEMBER_JOIN_TIMEOUT)
                 except (DiscordForbiddenError, DiscordHTTPException):
-                    pass  # User might have blocked/left
+                    pass
 
                 if log_channel:
                     await log_channel.send(
-                        f"⏰ **{member.name} ({member.id})** no introdujo la clave a tiempo (intento {VERIFICATION_MAX_ATTEMPTS - attempts_left + 1})."
+                        f"⏰ **{member.name} ({member.id})** no introdujo su nombre a tiempo (intento {VERIFICATION_MAX_ATTEMPTS - attempts_left + 1})."
                     )
-                return  # End verification for this user
+                return
 
-            key_provided = msg.content.strip()
-            # Pass the current attempt number for logging purposes, if needed by _verify_member_key
-            verification_successful = await _verify_member_key(
-                member, key_provided, sheet, log_channel
+            nombre = msg.content.strip()
+
+            # Ignorar comandos como !soporte para que sigan funcionando
+            if nombre.startswith("!"):
+                continue
+
+            # Discord limita los apodos a 32 caracteres
+            if len(nombre) < 2 or len(nombre) > 32:
+                attempts_left -= 1
+                if attempts_left > 0:
+                    try:
+                        await member.send(
+                            MSG_NAME_INVALID_RETRY.format(attempts_left=attempts_left)
+                        )
+                    except (DiscordForbiddenError, DiscordHTTPException):
+                        return
+                    continue
+                else:
+                    try:
+                        await member.send(MSG_NAME_NO_ATTEMPTS_LEFT)
+                    except (DiscordForbiddenError, DiscordHTTPException):
+                        pass
+                    if log_channel:
+                        await log_channel.send(
+                            f"❌ **{member.name} ({member.id})** falló el registro de nombre después de {VERIFICATION_MAX_ATTEMPTS} intentos."
+                        )
+                    return
+
+            # Asignar apodo
+            try:
+                await member.edit(nick=nombre)
+            except DiscordForbiddenError:
+                if log_channel:
+                    await log_channel.send(
+                        f"⚠️ **Permiso denegado:** No se pudo cambiar el apodo de {member.mention} ({member.id}) a '{nombre}'."
+                    )
+            except DiscordHTTPException as e_discord_http:
+                if log_channel:
+                    await log_channel.send(
+                        f"❗ **Error Discord API:** Al cambiar apodo de {member.mention} ({member.id}): {e_discord_http}"
+                    )
+
+            # Asignar rol de comunidad
+            role_to_assign = discord.utils.get(
+                member.guild.roles, name=COMUNIDAD_ROLE_NAME
             )
-
-            if verification_successful:
-                # _verify_member_key handles success messages to user and log
-                return  # Exit on_member_join successfully
-
-            # Verification failed for this attempt (key incorrect or other handled issue in _verify_member_key)
-            attempts_left -= 1
-            if attempts_left > 0:
+            if role_to_assign:
                 try:
+                    await member.add_roles(role_to_assign)
                     await member.send(
-                        MSG_VERIFY_RETRY_PROMPT.format(attempts_left=attempts_left)
+                        MSG_NAME_SUCCESS.format(
+                            nombre=nombre, rol_nombre=COMUNIDAD_ROLE_NAME
+                        )
                     )
-                except (DiscordForbiddenError, DiscordHTTPException):
                     if log_channel:
                         await log_channel.send(
-                            f"⚠️ No se pudo enviar DM de reintento a {member.mention} ({member.id}). DMs desactivados/bloqueado."
+                            f"✅ **{member.name} ({member.id})** registrado como `{nombre}` y asignado el rol `{COMUNIDAD_ROLE_NAME}`."
                         )
-                    return  # Cannot continue if we can't prompt for retry
+                except DiscordForbiddenError:
+                    if log_channel:
+                        await log_channel.send(
+                            f"⚠️ **Permiso denegado:** No se pudo asignar el rol '{COMUNIDAD_ROLE_NAME}' a {member.mention} ({member.id})."
+                        )
+                    try:
+                        await member.send(
+                            MSG_VERIFY_ERROR_PERMISSION
+                            + f" (No se pudo asignar el rol '{COMUNIDAD_ROLE_NAME}')"
+                        )
+                    except:
+                        pass
+                except DiscordHTTPException as e_discord_http:
+                    if log_channel:
+                        await log_channel.send(
+                            f"❗ **Error Discord API:** Al asignar rol '{COMUNIDAD_ROLE_NAME}' a {member.mention} ({member.id}): {e_discord_http}"
+                        )
+                    try:
+                        await member.send(
+                            MSG_VERIFY_ERROR_DISCORD_API
+                            + f" (Al intentar asignar el rol '{COMUNIDAD_ROLE_NAME}')"
+                        )
+                    except:
+                        pass
             else:
-                # All attempts used up
-                try:
-                    await member.send(MSG_VERIFY_NO_ATTEMPTS_LEFT)
-                except (DiscordForbiddenError, DiscordHTTPException):
-                    if log_channel:
-                        await log_channel.send(
-                            f"⚠️ No se pudo enviar DM de 'sin intentos' a {member.mention} ({member.id}). DMs desactivados/bloqueado."
-                        )
-
+                await member.send(
+                    MSG_NAME_ROLE_NOT_FOUND.format(rol_nombre=COMUNIDAD_ROLE_NAME)
+                )
                 if log_channel:
                     await log_channel.send(
-                        f"❌ **{member.name} ({member.id})** falló la verificación después de {VERIFICATION_MAX_ATTEMPTS} intentos."
+                        f"⚠️ **{member.name} ({member.id})** registrado como `{nombre}`, pero rol `{COMUNIDAD_ROLE_NAME}` no encontrado."
                     )
-                return  # End verification
+
+            return
 
     # Specific error handlers from previous step (DiscordForbiddenError, DiscordHTTPException for on_member_join scope)
     except DiscordForbiddenError as e_forbidden:
