@@ -1,7 +1,10 @@
 # Pycord (no discord.py): aporta discord.sinks y voice_client.start_recording
 # para grabar audio. discord.py NO tiene grabación de voz. No instalar ambos:
 # comparten el módulo 'discord' y entran en conflicto.
-py-cord[voice]
+# Fijado a 2.7.x: en 2.8.0 la API clásica de grabación (start_recording + sinks)
+# quedó rota ('PCMSink' object has no attribute 'sink_listeners'). 2.7.x conserva
+# la ruta clásica (opus.DecodeManager) que usa este bot.
+py-cord[voice]>=2.7,<2.8
 gspread
 oauth2client
 python-dotenv

@@ -1154,6 +1154,91 @@ def resolve_target_guild(ctx):
     return None
 
 
+async def stop_and_process_recording(guild, announce_channel=None):
+    """Detiene la grabación activa de un servidor (si la hay) y procesa el audio.
+
+    announce_channel: canal donde avisar y enviar el resultado. Si es None, se usa
+    el canal desde donde se inició la grabación.
+    Devuelve True si había una grabación que se ha detenido.
+    """
+    if guild.id not in recording_data:
+        return False
+
+    recording_info = recording_data[guild.id]
+    voice_client = recording_info['voice_client']
+    sink = recording_info['sink']
+    sink_type = recording_info.get('sink_type', 'Unknown')
+    filename = recording_info['filename']
+    provider = recording_info.get('provider')
+    channel = announce_channel or recording_info.get('channel')
+
+    try:
+        voice_client.stop_recording()
+    except Exception as stop_error:
+        print(f"Error deteniendo grabación: {stop_error}")
+        if channel:
+            await channel.send(f"⚠️ **Error deteniendo grabación**: {stop_error}")
+
+    duration = time.time() - recording_info['start_time']
+    if channel:
+        await channel.send(f"⏹️ **Grabación detenida** — {filename}")
+        await channel.send(f"⏱️ **Duración**: {duration:.1f} segundos")
+        await channel.send(f"🔄 **Procesando audio con sink {sink_type}...**")
+        await channel.send("⏳ *Esto puede tomar unos minutos dependiendo de la duración del audio*")
+
+    # Procesar el audio (transcripción + resumen). Limpia recording_data al terminar.
+    await asyncio.sleep(3)  # Dar tiempo a que se finalice la grabación
+    await recording_finished_callback(sink, channel, filename, guild.id, sink_type, provider)
+    return True
+
+
+@bot.event
+async def on_voice_state_update(member, before, after):
+    """Si el bot se queda solo en su canal de voz, detiene la grabación y se desconecta."""
+    # Ignorar los cambios de estado del propio bot.
+    if member.bot:
+        return
+
+    guild = member.guild
+    if guild.id not in voice_clients:
+        return
+
+    bot_channel = voice_clients[guild.id].channel
+    if bot_channel is None:
+        return
+
+    # Solo nos interesa cuando alguien SALE del canal del bot (incluye moverse a otro).
+    if before.channel != bot_channel or after.channel == bot_channel:
+        return
+
+    # ¿Queda algún humano en el canal del bot?
+    if any(not m.bot for m in bot_channel.members):
+        return
+
+    # El bot se ha quedado solo.
+    was_recording = guild.id in recording_data
+    announce = (recording_data.get(guild.id) or {}).get('channel') or log_channel
+    if announce:
+        if was_recording:
+            await announce.send("👋 Me he quedado solo en el canal de voz. Detengo la grabación y me desconecto.")
+        else:
+            await announce.send("👋 Me he quedado solo en el canal de voz. Me desconecto.")
+
+    # Detener y procesar la grabación (si la había) antes de desconectar.
+    await stop_and_process_recording(guild)
+
+    # Desconectar y limpiar el estado.
+    voice_client = voice_clients.pop(guild.id, None)
+    if voice_client is not None:
+        try:
+            await voice_client.disconnect()
+        except Exception as e:
+            print(f"Error al desconectar automáticamente: {e}")
+
+    if log_channel:
+        await log_channel.send(f"🔇 Bot desconectado automáticamente de '{bot_channel.name}' en {guild.name} (canal vacío).")
+
+
 @bot.command(name="conectar")
 async def join_voice(ctx, *, canal_nombre: str = None):
     if not await is_bot_admin(ctx):
@@ -1342,33 +1427,10 @@ async def stop_recording(ctx):
         await ctx.send("❌ No hay ninguna grabación en progreso en este servidor.")
         return
 
-    recording_info = recording_data[target_guild.id]
-    voice_client = recording_info['voice_client']
-    sink = recording_info['sink']
-    sink_type = recording_info.get('sink_type', 'Unknown')
-    filename = recording_info['filename']
-    provider = recording_info.get('provider')
-    
-    # Detener la grabación real
-    try:
-        voice_client.stop_recording()
-        await ctx.send(f"⏹️ **Grabación automática detenida** en {target_guild.name}")
-    except Exception as stop_error:
-        await ctx.send(f"⚠️ **Error deteniendo grabación**: {stop_error}")
-        print(f"Error deteniendo grabación: {stop_error}")
-    
-    duration = time.time() - recording_info['start_time']
-    await ctx.send(f"📊 **Archivo**: {filename}")
-    await ctx.send(f"⏱️ **Duración**: {duration:.1f} segundos")
-    await ctx.send(f"🔄 **Procesando audio con sink {sink_type}...**")
-    await ctx.send("⏳ *Esto puede tomar unos minutos dependiendo de la duración del audio*")
-    
-    # Procesar el audio directamente aquí
-    await asyncio.sleep(3)  # Dar más tiempo a que se finalice la grabación
-    await recording_finished_callback(sink, ctx.channel, filename, target_guild.id, sink_type, provider)
-    
+    await stop_and_process_recording(target_guild, announce_channel=ctx.channel)
+
     if log_channel:
-        await log_channel.send(f"⏹️ Grabación automática detenida por {ctx.author.name} en {target_guild.name}. Duración: {duration:.1f}s")
+        await log_channel.send(f"⏹️ Grabación detenida por {ctx.author.name} en {target_guild.name}.")
 
 
 @bot.command(name="transcribir")
