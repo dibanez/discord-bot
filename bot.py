@@ -1139,36 +1139,52 @@ async def recording_finished_callback(sink, channel, filename, guild_id, sink_ty
             del recording_data[guild_id]
 
 
+def resolve_target_guild(ctx):
+    """Servidor objetivo para los comandos de voz.
+
+    - Si el comando se escribe en un canal del servidor, devuelve ese servidor.
+    - Si se escribe por mensaje privado (DM) y el bot está en un único servidor,
+      devuelve ese servidor automáticamente.
+    - Devuelve None si no se puede determinar (DM con el bot en varios servidores).
+    """
+    if ctx.guild is not None:
+        return ctx.guild
+    if len(bot.guilds) == 1:
+        return bot.guilds[0]
+    return None
+
+
 @bot.command(name="conectar")
 async def join_voice(ctx, *, canal_nombre: str = None):
     if not await is_bot_admin(ctx):
         await ctx.send(MSG_ADMIN_REQUIRED)
         return
 
-    if ctx.guild is None:
-        await ctx.send("❌ Usa este comando en un canal de texto del servidor, no por mensaje privado.")
+    target_guild = resolve_target_guild(ctx)
+    if target_guild is None:
+        await ctx.send("❌ No puedo determinar el servidor. Escribe el comando en un canal del servidor.")
         return
 
-    target_guild = ctx.guild
-
-    # Determinar el canal de voz objetivo dentro de este servidor.
-    if canal_nombre is None:
+    # Determinar el canal de voz objetivo dentro de ese servidor.
+    if canal_nombre:
+        target_channel = discord.utils.find(
+            lambda c: c.name.lower() == canal_nombre.lower(), target_guild.voice_channels
+        )
+        if target_channel is None:
+            await ctx.send(f"❌ No se encontró un canal de voz llamado '{canal_nombre}' en este servidor.")
+            return
+    else:
         # Sin nombre: usar el canal de voz en el que está quien escribe.
-        if ctx.author.voice and ctx.author.voice.channel:
-            target_channel = ctx.author.voice.channel
+        # get_member funciona tanto desde el servidor como desde un DM.
+        member = target_guild.get_member(ctx.author.id)
+        if member and member.voice and member.voice.channel:
+            target_channel = member.voice.channel
         else:
             canales = "\n".join(f"• **{c.name}**" for c in target_guild.voice_channels) or "(no hay canales de voz)"
             await ctx.send(
                 "❌ Entra a un canal de voz y vuelve a usar `!conectar`, o indica el nombre con `!conectar [canal]`.\n\n"
                 f"**Canales de voz:**\n{canales}"
             )
-            return
-    else:
-        target_channel = discord.utils.find(
-            lambda c: c.name.lower() == canal_nombre.lower(), target_guild.voice_channels
-        )
-        if target_channel is None:
-            await ctx.send(f"❌ No se encontró un canal de voz llamado '{canal_nombre}' en este servidor.")
             return
 
     if target_guild.id in voice_clients:
@@ -1194,11 +1210,11 @@ async def leave_voice(ctx):
         await ctx.send(MSG_ADMIN_REQUIRED)
         return
 
-    if ctx.guild is None:
-        await ctx.send("❌ Usa este comando en un canal de texto del servidor.")
+    target_guild = resolve_target_guild(ctx)
+    if target_guild is None:
+        await ctx.send("❌ No puedo determinar el servidor. Escribe el comando en un canal del servidor.")
         return
 
-    target_guild = ctx.guild
     if target_guild.id not in voice_clients:
         await ctx.send("❌ No estoy conectado a ningún canal de voz en este servidor.")
         return
@@ -1224,11 +1240,10 @@ async def start_recording(ctx, proveedor: str = None, *, nombre_archivo: str = N
         await ctx.send(MSG_ADMIN_REQUIRED)
         return
 
-    if ctx.guild is None:
-        await ctx.send("❌ Usa este comando en un canal de texto del servidor.")
+    target_guild = resolve_target_guild(ctx)
+    if target_guild is None:
+        await ctx.send("❌ No puedo determinar el servidor. Escribe el comando en un canal del servidor.")
         return
-
-    target_guild = ctx.guild
 
     if target_guild.id not in voice_clients:
         await ctx.send("❌ No estoy conectado a ningún canal de voz. Usa `!conectar` primero.")
@@ -1318,11 +1333,11 @@ async def stop_recording(ctx):
         await ctx.send(MSG_ADMIN_REQUIRED)
         return
 
-    if ctx.guild is None:
-        await ctx.send("❌ Usa este comando en un canal de texto del servidor.")
+    target_guild = resolve_target_guild(ctx)
+    if target_guild is None:
+        await ctx.send("❌ No puedo determinar el servidor. Escribe el comando en un canal del servidor.")
         return
 
-    target_guild = ctx.guild
     if target_guild.id not in recording_data:
         await ctx.send("❌ No hay ninguna grabación en progreso en este servidor.")
         return
