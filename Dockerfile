@@ -2,9 +2,10 @@
 # El proveedor 'whisper' local (PyTorch) NO se incluye; ver requirements-whisper.txt.
 FROM python:3.12-slim
 
-# ffmpeg es necesario para que pydub procese y comprima el audio (export a MP3).
+# ffmpeg: procesar/comprimir audio (pydub). git: instalar py-cord desde master
+# (soporte DAVE/E2EE; aún no publicado en PyPI).
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg \
+    && apt-get install -y --no-install-recommends ffmpeg git \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
