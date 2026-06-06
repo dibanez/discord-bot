@@ -1,0 +1,31 @@
+# Secretos: nunca se hornean en la imagen (se inyectan por entorno en runtime).
+.env
+.env.*
+!.env.example
+credentials.json
+
+# Salidas y temporales
+recordings/
+*.wav
+*.pcm
+*.mp3
+temp_*
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Git y metadatos
+.git/
+.gitignore
+*.md
+tests/
+
+# Editor / SO
+.vscode/
+.idea/
+.DS_Store

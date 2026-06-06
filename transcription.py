@@ -77,7 +77,14 @@ def _get_whisper_model():
     """Carga (una sola vez) el modelo Whisper local."""
     global _whisper_model
     if _whisper_model is None:
-        import whisper
+        try:
+            import whisper
+        except ImportError as exc:
+            raise RuntimeError(
+                "El proveedor 'whisper' (local) requiere el paquete 'openai-whisper', "
+                "que no está instalado. Instálalo con 'pip install openai-whisper' o usa "
+                "los proveedores 'openai' / 'voxtral'."
+            ) from exc
         _whisper_model = whisper.load_model(WHISPER_MODEL_NAME)
     return _whisper_model
 
@@ -120,7 +127,12 @@ def _transcribe_voxtral(audio_path, language):
     """Transcribe con la API de Mistral (Voxtral)."""
     if not MISTRAL_API_KEY:
         raise RuntimeError("MISTRAL_API_KEY no configurada; no se puede usar el proveedor 'voxtral'.")
-    from mistralai import Mistral
+    # La ruta del import cambió entre versiones del SDK de Mistral:
+    # 1.x expone `from mistralai import Mistral`; 2.x lo mueve a `mistralai.client`.
+    try:
+        from mistralai import Mistral
+    except ImportError:
+        from mistralai.client import Mistral
 
     client = Mistral(api_key=MISTRAL_API_KEY)
     with open(audio_path, "rb") as f:

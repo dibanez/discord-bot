@@ -67,9 +67,46 @@ cd discord-verification-bot
 ---
 
 ## Uso
-1. Crea y configura tu archivo `.env`.
+1. Crea y configura tu archivo `.env` (puedes partir de `.env.example`).
 2. Agrega tu `credentials.json` de Google en la raíz del proyecto.
 3. Ejecuta el bot con `python bot.py`.
+
+---
+
+## 🐳 Despliegue con Docker / Dokploy
+
+El proyecto incluye `Dockerfile` y `docker-compose.yml`. La imagen es **ligera**
+(solo proveedores de transcripción por API: `openai` y `voxtral`); no incluye
+PyTorch ni el Whisper local.
+
+### Local con Docker Compose
+
+```bash
+cp .env.example .env   # y rellena los valores
+docker compose up -d --build
+docker compose logs -f
+```
+
+Las credenciales de Google se pueden aportar de dos formas:
+- **Recomendada**: pega el contenido de `credentials.json` en la variable
+  `GOOGLE_CREDENTIALS_JSON` (JSON en una línea o en base64). El bot crea el
+  archivo al arrancar.
+- **Alternativa**: descomenta el montaje de `./credentials.json` en
+  `docker-compose.yml`.
+
+### Dokploy
+
+1. Crea una aplicación de tipo **Compose** (o **Dockerfile**) apuntando a este repo.
+2. En la pestaña **Environment**, pega las variables de `.env.example` con tus
+   valores reales (incluida `GOOGLE_CREDENTIALS_JSON`). Dokploy las inyecta en el
+   `.env` que lee `docker-compose.yml`.
+3. (Opcional) Mantén el volumen `recordings` para conservar las transcripciones
+   entre despliegues.
+4. Despliega. Revisa los logs para ver `🟢 Bot iniciado correctamente`.
+
+> El proveedor `whisper` (local) no está disponible en la imagen Docker. Si lo
+> necesitas, instala las dependencias extra con `pip install -r requirements-whisper.txt`
+> en un entorno propio (la imagen crecería a varios GB por PyTorch).
 
 ---
 

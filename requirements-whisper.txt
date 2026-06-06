@@ -1,0 +1,5 @@
+# Dependencias opcionales para el proveedor de transcripción 'whisper' (local, sin conexión).
+# Atención: instala PyTorch (~2 GB). No es necesario si solo usas 'openai' o 'voxtral'.
+#   pip install -r requirements-whisper.txt
+-r requirements.txt
+openai-whisper

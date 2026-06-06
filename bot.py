@@ -159,6 +159,20 @@ voice_clients = {}
 recording_data = {}
 openai_client = None
 
+# En despliegues (p. ej. Dokploy) es más cómodo inyectar las credenciales de
+# Google por variable de entorno que montar un archivo. Si GOOGLE_CREDENTIALS_JSON
+# está definida (JSON crudo o codificado en base64), se escribe a GOOGLE_CREDENTIALS_PATH.
+_google_creds_json = os.getenv("GOOGLE_CREDENTIALS_JSON")
+if _google_creds_json and not os.path.exists(GOOGLE_CREDENTIALS_PATH):
+    import base64
+    content = _google_creds_json.strip()
+    if not content.startswith("{"):
+        # Asumimos base64 si no parece JSON directo.
+        content = base64.b64decode(content).decode("utf-8")
+    with open(GOOGLE_CREDENTIALS_PATH, "w", encoding="utf-8") as _cred_file:
+        _cred_file.write(content)
+    print("✅ Credenciales de Google escritas desde GOOGLE_CREDENTIALS_JSON")
+
 scope = [
     "https://spreadsheets.google.com/feeds",
     "https://www.googleapis.com/auth/drive",

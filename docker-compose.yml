@@ -1,0 +1,26 @@
+# Despliegue del bot en Dokploy (o docker compose local).
+#
+# Variables de entorno: en Dokploy se definen en la pestaña "Environment" del
+# proyecto; Dokploy las escribe en un archivo .env que 'env_file' lee aquí.
+# En local, crea un .env a partir de .env.example.
+#
+# Credenciales de Google: en lugar de montar credentials.json, define la
+# variable GOOGLE_CREDENTIALS_JSON (JSON crudo o base64) y el bot la materializa
+# al arrancar. Alternativamente, descomenta el volumen de credentials.json.
+
+services:
+  bot:
+    build: .
+    image: anfaia-bot
+    container_name: anfaia-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      # Persistir las transcripciones generadas.
+      - recordings:/app/recordings
+      # Opción alternativa a GOOGLE_CREDENTIALS_JSON: montar el archivo directamente.
+      # - ./credentials.json:/app/credentials.json:ro
+
+volumes:
+  recordings:
