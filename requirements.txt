@@ -1,4 +1,7 @@
-discord.py[voice]
+# Pycord (no discord.py): aporta discord.sinks y voice_client.start_recording
+# para grabar audio. discord.py NO tiene grabación de voz. No instalar ambos:
+# comparten el módulo 'discord' y entran en conflicto.
+py-cord[voice]
 gspread
 oauth2client
 python-dotenv

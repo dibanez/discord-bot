@@ -16,10 +16,10 @@ Bot de Discord para **verificar usuarios nuevos** mediante una **clave** almacen
 - 🔐 Comando `!testclave` para que los administradores comprueben manualmente claves.
 - 🆘 Comando `!soporte` para que **cualquier usuario** pueda enviar una solicitud privada de ayuda al equipo de admins.
 - 🎙️ **Nuevos comandos de grabación de audio y transcripción:**
-  - `!conectar [nombre_canal]` - Conecta el bot a un canal de voz específico
-  - `!desconectar [nombre_servidor]` - Desconecta el bot de un canal de voz
-  - `!grabar [nombre_servidor] [proveedor] [nombre_archivo]` - Inicia la grabación automática de audio
-  - `!parar [nombre_servidor]` - Detiene la grabación y procesa la transcripción
+  - `!conectar` - Conecta el bot al canal de voz en el que estás (o `!conectar [canal]`)
+  - `!desconectar` - Desconecta el bot del canal de voz
+  - `!grabar [proveedor] [nombre_archivo]` - Inicia la grabación automática de audio
+  - `!parar` - Detiene la grabación y procesa la transcripción
   - `!transcribir [proveedor] [nombre_archivo]` - Transcribe archivos de audio adjuntos
   - `!estado` - Muestra el estado actual de conexiones y grabaciones
 - 🧠 **Transcripción con múltiples proveedores** (seleccionables por comando):
@@ -144,14 +144,17 @@ Esto descubrirá y ejecutará automáticamente todas las pruebas unitarias ubica
 
 ### Comandos de Grabación (Solo Administradores)
 
-- **`!conectar [nombre_canal]`** - Conecta el bot a un canal de voz
-- **`!desconectar [nombre_servidor]`** - Desconecta el bot del canal de voz
-- **`!grabar [nombre_servidor] [proveedor] [nombre_archivo_opcional]`** - Inicia grabación automática.
+- **`!conectar`** - Conecta el bot al canal de voz en el que estás. También `!conectar [canal]` para indicarlo por nombre.
+- **`!desconectar`** - Desconecta el bot del canal de voz de este servidor
+- **`!grabar [proveedor] [nombre_archivo_opcional]`** - Inicia grabación automática.
   El `proveedor` es opcional (`openai` / `voxtral` / `whisper`); si se omite se usa el de por defecto.
-- **`!parar [nombre_servidor]`** - Detiene la grabación y genera transcripción
+- **`!parar`** - Detiene la grabación y genera transcripción
 - **`!transcribir [proveedor] [nombre_archivo_opcional]`** - Transcribe archivos de audio adjuntos.
   El `proveedor` es opcional; ejemplos: `!transcribir voxtral mi_reunion`, `!transcribir openai`.
 - **`!estado`** - Muestra el estado actual de conexiones y grabaciones
+
+> Los comandos de voz se usan **dentro del servidor** (en un canal de texto); el bot
+> ya sabe de qué servidor se trata, por eso no hace falta indicar el nombre del servidor.
 
 ### Proceso de Grabación
 

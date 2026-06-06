@@ -1144,159 +1144,106 @@ async def join_voice(ctx, *, canal_nombre: str = None):
     if not await is_bot_admin(ctx):
         await ctx.send(MSG_ADMIN_REQUIRED)
         return
-    
-    # Si no se especifica canal, mostrar ayuda
+
+    if ctx.guild is None:
+        await ctx.send("❌ Usa este comando en un canal de texto del servidor, no por mensaje privado.")
+        return
+
+    target_guild = ctx.guild
+
+    # Determinar el canal de voz objetivo dentro de este servidor.
     if canal_nombre is None:
-        # Listar canales de voz disponibles
-        available_channels = []
-        for guild in bot.guilds:
-            for channel in guild.voice_channels:
-                available_channels.append(f"• **{channel.name}** (Servidor: {guild.name})")
-        
-        if available_channels:
-            channels_text = "\n".join(available_channels)
-            await ctx.send(f"❌ Especifica el nombre del canal de voz.\n\n**Canales disponibles:**\n{channels_text}\n\n**Uso:** `!conectar [nombre del canal]`")
+        # Sin nombre: usar el canal de voz en el que está quien escribe.
+        if ctx.author.voice and ctx.author.voice.channel:
+            target_channel = ctx.author.voice.channel
         else:
-            await ctx.send("❌ No hay canales de voz disponibles en los servidores.")
-        return
-    
-    # Buscar el canal por nombre en todos los servidores
-    target_channel = None
-    target_guild = None
-    
-    for guild in bot.guilds:
-        for channel in guild.voice_channels:
-            if channel.name.lower() == canal_nombre.lower():
-                target_channel = channel
-                target_guild = guild
-                break
-        if target_channel:
-            break
-    
-    if target_channel is None:
-        await ctx.send(f"❌ No se encontró un canal de voz llamado '{canal_nombre}'.")
-        return
-    
+            canales = "\n".join(f"• **{c.name}**" for c in target_guild.voice_channels) or "(no hay canales de voz)"
+            await ctx.send(
+                "❌ Entra a un canal de voz y vuelve a usar `!conectar`, o indica el nombre con `!conectar [canal]`.\n\n"
+                f"**Canales de voz:**\n{canales}"
+            )
+            return
+    else:
+        target_channel = discord.utils.find(
+            lambda c: c.name.lower() == canal_nombre.lower(), target_guild.voice_channels
+        )
+        if target_channel is None:
+            await ctx.send(f"❌ No se encontró un canal de voz llamado '{canal_nombre}' en este servidor.")
+            return
+
     if target_guild.id in voice_clients:
         current_channel = voice_clients[target_guild.id].channel
-        await ctx.send(f"❌ Ya estoy conectado a un canal de voz en {target_guild.name}: **{current_channel.name}**")
+        await ctx.send(f"❌ Ya estoy conectado a **{current_channel.name}**. Usa `!desconectar` primero.")
         return
-    
+
     try:
         voice_client = await target_channel.connect()
         voice_clients[target_guild.id] = voice_client
-        await ctx.send(f"✅ Conectado al canal de voz: **{target_channel.name}** en el servidor **{target_guild.name}**")
-        
+        await ctx.send(f"✅ Conectado al canal de voz: **{target_channel.name}**")
+
         if log_channel:
             await log_channel.send(f"🔊 Bot conectado al canal de voz '{target_channel.name}' en {target_guild.name} por {ctx.author.name}")
-    
+
     except Exception as e:
         await ctx.send(f"❌ Error al conectar al canal de voz: {e}")
 
 
 @bot.command(name="desconectar")
-async def leave_voice(ctx, *, servidor_nombre: str = None):
+async def leave_voice(ctx):
     if not await is_bot_admin(ctx):
         await ctx.send(MSG_ADMIN_REQUIRED)
         return
-    
-    if not voice_clients:
-        await ctx.send("❌ No estoy conectado a ningún canal de voz.")
+
+    if ctx.guild is None:
+        await ctx.send("❌ Usa este comando en un canal de texto del servidor.")
         return
-    
-    # Si no se especifica servidor, mostrar donde está conectado
-    if servidor_nombre is None:
-        connected_servers = []
-        for guild_id, voice_client in voice_clients.items():
-            guild = bot.get_guild(guild_id)
-            if guild and voice_client.channel:
-                connected_servers.append(f"• **{guild.name}** - Canal: {voice_client.channel.name}")
-        
-        if connected_servers:
-            servers_text = "\n".join(connected_servers)
-            await ctx.send(f"❌ Especifica el servidor del cual desconectar.\n\n**Conectado en:**\n{servers_text}\n\n**Uso:** `!desconectar [nombre del servidor]`")
-        else:
-            await ctx.send("❌ No estoy conectado a ningún canal de voz actualmente.")
-        return
-    
-    # Buscar el servidor por nombre
-    target_guild = None
-    for guild in bot.guilds:
-        if guild.name.lower() == servidor_nombre.lower():
-            target_guild = guild
-            break
-    
-    if target_guild is None:
-        await ctx.send(f"❌ No se encontró un servidor llamado '{servidor_nombre}'.")
-        return
-    
+
+    target_guild = ctx.guild
     if target_guild.id not in voice_clients:
-        await ctx.send(f"❌ No estoy conectado a ningún canal de voz en el servidor '{target_guild.name}'.")
+        await ctx.send("❌ No estoy conectado a ningún canal de voz en este servidor.")
         return
-    
+
     voice_client = voice_clients[target_guild.id]
     channel_name = voice_client.channel.name if voice_client.channel else "Canal desconocido"
-    
+
     if target_guild.id in recording_data:
         await ctx.send("⚠️ Grabación detenida automáticamente.")
         del recording_data[target_guild.id]
-    
+
     await voice_client.disconnect()
     del voice_clients[target_guild.id]
-    await ctx.send(f"✅ Desconectado del canal de voz **{channel_name}** en el servidor **{target_guild.name}**.")
-    
+    await ctx.send(f"✅ Desconectado del canal de voz **{channel_name}**.")
+
     if log_channel:
         await log_channel.send(f"🔇 Bot desconectado del canal de voz '{channel_name}' en {target_guild.name} por {ctx.author.name}")
 
 
 @bot.command(name="grabar")
-async def start_recording(ctx, servidor_nombre: str = None, proveedor: str = None, *, nombre_archivo: str = None):
+async def start_recording(ctx, proveedor: str = None, *, nombre_archivo: str = None):
     if not await is_bot_admin(ctx):
         await ctx.send(MSG_ADMIN_REQUIRED)
         return
 
-    if not voice_clients:
-        await ctx.send("❌ No estoy conectado a ningún canal de voz. Usa `!conectar [canal]` primero.")
+    if ctx.guild is None:
+        await ctx.send("❌ Usa este comando en un canal de texto del servidor.")
         return
 
-    # El segundo argumento es opcional: si no es un proveedor válido, forma parte del nombre.
+    target_guild = ctx.guild
+
+    if target_guild.id not in voice_clients:
+        await ctx.send("❌ No estoy conectado a ningún canal de voz. Usa `!conectar` primero.")
+        return
+
+    # El proveedor es opcional: si no es válido, forma parte del nombre del archivo.
     if proveedor and not is_valid_provider(proveedor):
         nombre_archivo = f"{proveedor} {nombre_archivo}".strip() if nombre_archivo else proveedor
         proveedor = None
     proveedor = normalize_provider(proveedor)
-    
-    # Si no se especifica servidor, mostrar opciones
-    if servidor_nombre is None:
-        connected_servers = []
-        for guild_id, voice_client in voice_clients.items():
-            guild = bot.get_guild(guild_id)
-            if guild and voice_client.channel:
-                connected_servers.append(f"• **{guild.name}** - Canal: {voice_client.channel.name}")
-        
-        if connected_servers:
-            servers_text = "\n".join(connected_servers)
-            await ctx.send(f"❌ Especifica el servidor donde grabar.\n\n**Conectado en:**\n{servers_text}\n\n**Uso:** `!grabar [servidor] [proveedor] [nombre archivo opcional]`\n**Proveedores:** `openai` (gpt-4o-transcribe), `voxtral` (Mistral), `whisper` (local)")
-        return
-    
-    # Buscar el servidor por nombre
-    target_guild = None
-    for guild in bot.guilds:
-        if guild.name.lower() == servidor_nombre.lower():
-            target_guild = guild
-            break
-    
-    if target_guild is None:
-        await ctx.send(f"❌ No se encontró un servidor llamado '{servidor_nombre}'.")
-        return
-    
-    if target_guild.id not in voice_clients:
-        await ctx.send(f"❌ No estoy conectado a ningún canal de voz en el servidor '{target_guild.name}'. Usa `!conectar [canal]` primero.")
-        return
-    
+
     if target_guild.id in recording_data:
-        await ctx.send(f"❌ Ya hay una grabación en progreso en el servidor '{target_guild.name}'.")
+        await ctx.send("❌ Ya hay una grabación en progreso en este servidor.")
         return
-    
+
     if nombre_archivo is None:
         timestamp = int(time.time())
         nombre_archivo = f"grabacion_{timestamp}"
@@ -1351,10 +1298,10 @@ async def start_recording(ctx, servidor_nombre: str = None, proveedor: str = Non
 
         channel_name = voice_client.channel.name
         await ctx.send(f"🔴 **Grabación AUTOMÁTICA iniciada**: {nombre_archivo}")
-        await ctx.send(f"📍 **Servidor**: {target_guild.name} - Canal: {channel_name}")
+        await ctx.send(f"📍 **Canal**: {channel_name}")
         await ctx.send(f"🗣️ **Transcripción**: {provider_label(proveedor)}")
         await ctx.send("✅ **El bot está grabando automáticamente todo el audio del canal**")
-        await ctx.send(f"Usa `!parar {target_guild.name}` para detener la grabación y obtener la transcripción.")
+        await ctx.send("Usa `!parar` para detener la grabación y obtener la transcripción.")
         await ctx.send("🎙️ **Habla normalmente** - El bot captura automáticamente todas las voces del canal.")
         
         if log_channel:
@@ -1366,43 +1313,20 @@ async def start_recording(ctx, servidor_nombre: str = None, proveedor: str = Non
 
 
 @bot.command(name="parar")
-async def stop_recording(ctx, *, servidor_nombre: str = None):
+async def stop_recording(ctx):
     if not await is_bot_admin(ctx):
         await ctx.send(MSG_ADMIN_REQUIRED)
         return
-    
-    if not recording_data:
-        await ctx.send("❌ No hay ninguna grabación en progreso.")
+
+    if ctx.guild is None:
+        await ctx.send("❌ Usa este comando en un canal de texto del servidor.")
         return
-    
-    # Si no se especifica servidor, mostrar grabaciones activas
-    if servidor_nombre is None:
-        active_recordings = []
-        for guild_id, rec_info in recording_data.items():
-            guild = bot.get_guild(guild_id)
-            if guild:
-                active_recordings.append(f"• **{guild.name}** - Archivo: {rec_info['filename']}")
-        
-        if active_recordings:
-            recordings_text = "\n".join(active_recordings)
-            await ctx.send(f"❌ Especifica el servidor donde parar la grabación.\n\n**Grabaciones activas:**\n{recordings_text}\n\n**Uso:** `!parar [servidor]`")
-        return
-    
-    # Buscar el servidor por nombre
-    target_guild = None
-    for guild in bot.guilds:
-        if guild.name.lower() == servidor_nombre.lower():
-            target_guild = guild
-            break
-    
-    if target_guild is None:
-        await ctx.send(f"❌ No se encontró un servidor llamado '{servidor_nombre}'.")
-        return
-    
+
+    target_guild = ctx.guild
     if target_guild.id not in recording_data:
-        await ctx.send(f"❌ No hay ninguna grabación en progreso en el servidor '{target_guild.name}'.")
+        await ctx.send("❌ No hay ninguna grabación en progreso en este servidor.")
         return
-    
+
     recording_info = recording_data[target_guild.id]
     voice_client = recording_info['voice_client']
     sink = recording_info['sink']
