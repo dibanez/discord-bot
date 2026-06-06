@@ -1154,6 +1154,21 @@ def resolve_target_guild(ctx):
     return None
 
 
+def get_voice_client(guild):
+    """Cliente de voz REAL del bot en ese servidor (la fuente de verdad de Pycord).
+
+    El diccionario `voice_clients` puede desincronizarse del estado real (conexiones
+    zombi que no se cierran bien). Esta función consulta `guild.voice_client`, mantiene
+    el cache sincronizado y devuelve None si no hay una conexión viva.
+    """
+    vc = guild.voice_client
+    if vc is not None and vc.is_connected():
+        voice_clients[guild.id] = vc
+        return vc
+    voice_clients.pop(guild.id, None)
+    return None
+
+
 async def stop_and_process_recording(guild, announce_channel=None):
     """Detiene la grabación activa de un servidor (si la hay) y procesa el audio.
 
@@ -1207,10 +1222,11 @@ async def on_voice_state_update(member, before, after):
         return
 
     guild = member.guild
-    if guild.id not in voice_clients:
+    voice_client = get_voice_client(guild)
+    if voice_client is None:
         return
 
-    bot_channel = voice_clients[guild.id].channel
+    bot_channel = voice_client.channel
     if bot_channel is None:
         return
 
@@ -1228,7 +1244,7 @@ async def on_voice_state_update(member, before, after):
     await asyncio.sleep(ALONE_DISCONNECT_GRACE)
 
     # Re-comprobar tras la espera: ¿sigo conectado al mismo canal y sigo solo?
-    voice_client = voice_clients.get(guild.id)
+    voice_client = get_voice_client(guild)
     if voice_client is None or voice_client.channel is None:
         return  # Ya no estoy conectado (p. ej. !desconectar durante la espera).
     bot_channel = voice_client.channel
@@ -1247,12 +1263,11 @@ async def on_voice_state_update(member, before, after):
 
     await stop_and_process_recording(guild)
 
-    voice_client = voice_clients.pop(guild.id, None)
-    if voice_client is not None:
-        try:
-            await voice_client.disconnect()
-        except Exception as e:
-            print(f"Error al desconectar automáticamente: {e}")
+    voice_clients.pop(guild.id, None)
+    try:
+        await voice_client.disconnect(force=True)
+    except Exception as e:
+        print(f"Error al desconectar automáticamente: {e}")
 
     if log_channel:
         await log_channel.send(f"🔇 Bot desconectado automáticamente de '{bot_channel.name}' en {guild.name} (canal vacío).")
@@ -1291,13 +1306,22 @@ async def join_voice(ctx, *, canal_nombre: str = None):
             )
             return
 
-    if target_guild.id in voice_clients:
-        current_channel = voice_clients[target_guild.id].channel
-        await ctx.send(f"❌ Ya estoy conectado a **{current_channel.name}**. Usa `!desconectar` primero.")
-        return
+    # Estado real de Pycord (no el cache, que puede estar desincronizado).
+    existing = target_guild.voice_client
+    if existing is not None:
+        if existing.is_connected() and existing.channel and existing.channel.id == target_channel.id:
+            voice_clients[target_guild.id] = existing
+            await ctx.send(f"✅ Ya estaba conectado a **{target_channel.name}**.")
+            return
+        # Conexión en otro canal o zombi: limpiarla a la fuerza antes de reconectar.
+        try:
+            await existing.disconnect(force=True)
+        except Exception as e:
+            print(f"Error limpiando conexión de voz previa: {e}")
+        voice_clients.pop(target_guild.id, None)
 
     try:
-        voice_client = await target_channel.connect()
+        voice_client = await target_channel.connect(reconnect=True)
         voice_clients[target_guild.id] = voice_client
         await ctx.send(f"✅ Conectado al canal de voz: **{target_channel.name}**")
 
@@ -1305,6 +1329,7 @@ async def join_voice(ctx, *, canal_nombre: str = None):
             await log_channel.send(f"🔊 Bot conectado al canal de voz '{target_channel.name}' en {target_guild.name} por {ctx.author.name}")
 
     except Exception as e:
+        voice_clients.pop(target_guild.id, None)
         await ctx.send(f"❌ Error al conectar al canal de voz: {e}")
 
 
@@ -1319,19 +1344,25 @@ async def leave_voice(ctx):
         await ctx.send("❌ No puedo determinar el servidor. Escribe el comando en un canal del servidor.")
         return
 
-    if target_guild.id not in voice_clients:
+    voice_client = target_guild.voice_client or voice_clients.get(target_guild.id)
+    if voice_client is None:
+        voice_clients.pop(target_guild.id, None)
         await ctx.send("❌ No estoy conectado a ningún canal de voz en este servidor.")
         return
 
-    voice_client = voice_clients[target_guild.id]
     channel_name = voice_client.channel.name if voice_client.channel else "Canal desconocido"
 
     if target_guild.id in recording_data:
         await ctx.send("⚠️ Grabación detenida automáticamente.")
         del recording_data[target_guild.id]
 
-    await voice_client.disconnect()
-    del voice_clients[target_guild.id]
+    # force=True garantiza que la conexión (incluso zombi) se cierra del todo,
+    # para que un !conectar posterior no falle con "Already connected".
+    try:
+        await voice_client.disconnect(force=True)
+    except Exception as e:
+        print(f"Error al desconectar: {e}")
+    voice_clients.pop(target_guild.id, None)
     await ctx.send(f"✅ Desconectado del canal de voz **{channel_name}**.")
 
     if log_channel:
@@ -1349,7 +1380,8 @@ async def start_recording(ctx, proveedor: str = None, *, nombre_archivo: str = N
         await ctx.send("❌ No puedo determinar el servidor. Escribe el comando en un canal del servidor.")
         return
 
-    if target_guild.id not in voice_clients:
+    voice_client = get_voice_client(target_guild)
+    if voice_client is None:
         await ctx.send("❌ No estoy conectado a ningún canal de voz. Usa `!conectar` primero.")
         return
 
@@ -1368,8 +1400,8 @@ async def start_recording(ctx, proveedor: str = None, *, nombre_archivo: str = N
         nombre_archivo = f"grabacion_{timestamp}"
     
     try:
-        voice_client = voice_clients[target_guild.id]
-        
+        # voice_client ya resuelto arriba con get_voice_client (conexión viva).
+
         # Intentar con diferentes tipos de sink para mayor compatibilidad
         try:
             # Intentar primero con PCMSink que es más básico
