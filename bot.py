@@ -1192,9 +1192,16 @@ async def stop_and_process_recording(guild, announce_channel=None):
     return True
 
 
+# Segundos que el bot espera estando solo antes de auto-desconectarse.
+# Evita desconexiones por salidas momentáneas. 0 desactiva la auto-desconexión.
+ALONE_DISCONNECT_GRACE = int(os.getenv("ALONE_DISCONNECT_GRACE_SECONDS", "60"))
+
+
 @bot.event
 async def on_voice_state_update(member, before, after):
     """Si el bot se queda solo en su canal de voz, detiene la grabación y se desconecta."""
+    if ALONE_DISCONNECT_GRACE <= 0:
+        return
     # Ignorar los cambios de estado del propio bot.
     if member.bot:
         return
@@ -1215,7 +1222,21 @@ async def on_voice_state_update(member, before, after):
     if any(not m.bot for m in bot_channel.members):
         return
 
-    # El bot se ha quedado solo.
+    # El bot se ha quedado solo. Esperar un margen por si alguien vuelve enseguida.
+    # Durante esta espera NO se toca voice_clients, así que un !grabar inmediato funciona.
+    print(f"[voz] Bot solo en '{bot_channel.name}' ({guild.name}); espero {ALONE_DISCONNECT_GRACE}s antes de desconectar.")
+    await asyncio.sleep(ALONE_DISCONNECT_GRACE)
+
+    # Re-comprobar tras la espera: ¿sigo conectado al mismo canal y sigo solo?
+    voice_client = voice_clients.get(guild.id)
+    if voice_client is None or voice_client.channel is None:
+        return  # Ya no estoy conectado (p. ej. !desconectar durante la espera).
+    bot_channel = voice_client.channel
+    if any(not m.bot for m in bot_channel.members):
+        print(f"[voz] Alguien volvió a '{bot_channel.name}'; cancelo la auto-desconexión.")
+        return
+
+    # Sigo solo: avisar, parar la grabación (si la hay) y desconectar.
     was_recording = guild.id in recording_data
     announce = (recording_data.get(guild.id) or {}).get('channel') or log_channel
     if announce:
@@ -1224,10 +1245,8 @@ async def on_voice_state_update(member, before, after):
         else:
             await announce.send("👋 Me he quedado solo en el canal de voz. Me desconecto.")
 
-    # Detener y procesar la grabación (si la había) antes de desconectar.
     await stop_and_process_recording(guild)
 
-    # Desconectar y limpiar el estado.
     voice_client = voice_clients.pop(guild.id, None)
     if voice_client is not None:
         try:
