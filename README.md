@@ -18,10 +18,14 @@ Bot de Discord para **verificar usuarios nuevos** mediante una **clave** almacen
 - 🎙️ **Nuevos comandos de grabación de audio y transcripción:**
   - `!conectar [nombre_canal]` - Conecta el bot a un canal de voz específico
   - `!desconectar [nombre_servidor]` - Desconecta el bot de un canal de voz
-  - `!grabar [nombre_servidor] [nombre_archivo]` - Inicia la grabación automática de audio
+  - `!grabar [nombre_servidor] [proveedor] [nombre_archivo]` - Inicia la grabación automática de audio
   - `!parar [nombre_servidor]` - Detiene la grabación y procesa la transcripción
-  - `!transcribir [nombre_archivo]` - Transcribe archivos de audio adjuntos
+  - `!transcribir [proveedor] [nombre_archivo]` - Transcribe archivos de audio adjuntos
   - `!estado` - Muestra el estado actual de conexiones y grabaciones
+- 🧠 **Transcripción con múltiples proveedores** (seleccionables por comando):
+  - `openai` - API de OpenAI con el modelo `gpt-4o-transcribe` (por defecto)
+  - `voxtral` - API de Mistral con el modelo Voxtral (`voxtral-mini-latest`)
+  - `whisper` - Modelo Whisper ejecutado en local, sin conexión (fallback)
 
 ---
 
@@ -38,9 +42,16 @@ Bot de Discord para **verificar usuarios nuevos** mediante una **clave** almacen
   - Acceso compartido a la cuenta de servicio.
   - Formato de columnas: `Clave`, `Nombre Discord`, `Rol Asignado`.
 - **Dependencias adicionales para grabación de audio:**
-  - `whisper` - Para transcripción de audio
-  - `pydub` - Para procesamiento de audio
+  - `openai` - Transcripción con `gpt-4o-transcribe` y generación de resúmenes
+  - `mistralai` - Transcripción con Voxtral
+  - `openai-whisper` - Transcripción local (fallback sin conexión)
+  - `pydub` / `ffmpeg-python` - Para procesamiento y compresión de audio
   - `PyNaCl` - Para funcionalidad de voz en Discord
+- **Variables de entorno para transcripción** (ver `.env`):
+  - `DEFAULT_TRANSCRIPTION_PROVIDER` - Proveedor por defecto: `openai`, `voxtral` o `whisper`
+  - `OPENAI_API_KEY` - Necesaria para `openai` y para los resúmenes
+  - `MISTRAL_API_KEY` - Necesaria para `voxtral`
+  - `OPENAI_TRANSCRIBE_MODEL`, `VOXTRAL_MODEL`, `WHISPER_MODEL` - Modelos configurables
 
 ---
 
@@ -98,9 +109,11 @@ Esto descubrirá y ejecutará automáticamente todas las pruebas unitarias ubica
 
 - **`!conectar [nombre_canal]`** - Conecta el bot a un canal de voz
 - **`!desconectar [nombre_servidor]`** - Desconecta el bot del canal de voz
-- **`!grabar [nombre_servidor] [nombre_archivo_opcional]`** - Inicia grabación automática
+- **`!grabar [nombre_servidor] [proveedor] [nombre_archivo_opcional]`** - Inicia grabación automática.
+  El `proveedor` es opcional (`openai` / `voxtral` / `whisper`); si se omite se usa el de por defecto.
 - **`!parar [nombre_servidor]`** - Detiene la grabación y genera transcripción
-- **`!transcribir [nombre_archivo_opcional]`** - Transcribe archivos de audio adjuntos
+- **`!transcribir [proveedor] [nombre_archivo_opcional]`** - Transcribe archivos de audio adjuntos.
+  El `proveedor` es opcional; ejemplos: `!transcribir voxtral mi_reunion`, `!transcribir openai`.
 - **`!estado`** - Muestra el estado actual de conexiones y grabaciones
 
 ### Proceso de Grabación
@@ -108,7 +121,7 @@ Esto descubrirá y ejecutará automáticamente todas las pruebas unitarias ubica
 1. **Conectar**: El bot se conecta a un canal de voz específico
 2. **Grabar**: Inicia la grabación automática de todas las voces en el canal
 3. **Procesar**: Al detener, el bot procesa automáticamente el audio
-4. **Transcribir**: Genera una transcripción usando Whisper AI
+4. **Transcribir**: Genera una transcripción con el proveedor elegido (OpenAI `gpt-4o-transcribe`, Mistral Voxtral o Whisper local)
 5. **Guardar**: Los archivos se guardan en la carpeta `recordings/`
 
 ### Archivos Generados
