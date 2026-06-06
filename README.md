@@ -142,6 +142,15 @@ Esto descubrirá y ejecutará automáticamente todas las pruebas unitarias ubica
 
 ## 🎙️ Funcionalidades de Grabación de Audio
 
+> ⚠️ **La grabación EN VIVO está deshabilitada temporalmente.** Discord forzó el cifrado
+> de extremo a extremo en voz (E2EE/DAVE, marzo 2026) y la librería todavía no puede
+> capturar ese audio ([py-cord issue #3139](https://github.com/Pycord-Development/pycord/issues/3139)).
+> Los comandos `!conectar` y `!grabar` responden con un aviso. Para reactivarla cuando
+> haya fix upstream: fija la versión corregida de py-cord y pon `LIVE_RECORDING_ENABLED=true`.
+>
+> ✅ **Mientras tanto, usa `!transcribir`**: graba la reunión con otra herramienta
+> (Craig, OBS, el móvil…) y sube el archivo para obtener transcripción y resumen.
+
 ### Comandos de Grabación (Solo Administradores)
 
 - **`!conectar`** - Conecta el bot al canal de voz en el que estás. También `!conectar [canal]` para indicarlo por nombre.

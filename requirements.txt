@@ -1,10 +1,9 @@
-# Pycord (no discord.py): aporta discord.sinks y voice_client.start_recording.
-# Instalado desde la rama master porque las versiones publicadas no sirven:
-#   - 2.7.x no soporta DAVE/E2EE -> no conecta a voz (error 4017) tras marzo 2026.
-#   - 2.8.0 conecta con DAVE pero rompe la API clásica de grabación (sink_listeners).
-# master junta ambas cosas (DAVE + grabación clásica). Es código no publicado:
-# cuando py-cord saque una versión estable con DAVE, fijar esa versión aquí.
-py-cord[voice] @ git+https://github.com/Pycord-Development/pycord.git@master
+# Pycord (no discord.py): librería de Discord con soporte de voz.
+# La grabación EN VIVO está deshabilitada por flag (LIVE_RECORDING_ENABLED) porque
+# Discord forzó cifrado E2EE/DAVE en marzo 2026 y py-cord aún no descifra el audio
+# recibido (issue #3139). 2.8.0 sí soporta el handshake DAVE para conectar a voz.
+# Cuando py-cord publique el fix de recepción, fijar esa versión y activar el flag.
+py-cord[voice]==2.8.0
 gspread
 oauth2client
 python-dotenv

@@ -1211,6 +1211,18 @@ async def stop_and_process_recording(guild, announce_channel=None):
 # Evita desconexiones por salidas momentáneas. 0 desactiva la auto-desconexión.
 ALONE_DISCONNECT_GRACE = int(os.getenv("ALONE_DISCONNECT_GRACE_SECONDS", "60"))
 
+# La grabación EN VIVO está deshabilitada por defecto: Discord forzó cifrado E2EE
+# (DAVE, marzo 2026) y py-cord aún no descifra el audio recibido (issue #3139).
+# Cuando py-cord publique el fix, fijar esa versión y poner LIVE_RECORDING_ENABLED=true.
+LIVE_RECORDING_ENABLED = os.getenv("LIVE_RECORDING_ENABLED", "false").strip().lower() in ("1", "true", "yes", "si", "sí")
+MSG_LIVE_RECORDING_DISABLED = (
+    "🔒 **La grabación en vivo no está disponible ahora mismo.**\n"
+    "Discord cifró la voz de extremo a extremo (E2EE/DAVE) y la librería todavía no "
+    "puede capturar ese audio (pendiente de arreglo upstream).\n\n"
+    "✅ **Alternativa que sí funciona:** graba la reunión con otra herramienta "
+    "(Craig, OBS, el móvil…) y súbela con `!transcribir` para obtener transcripción y resumen."
+)
+
 
 @bot.event
 async def on_voice_state_update(member, before, after):
@@ -1277,6 +1289,10 @@ async def on_voice_state_update(member, before, after):
 async def join_voice(ctx, *, canal_nombre: str = None):
     if not await is_bot_admin(ctx):
         await ctx.send(MSG_ADMIN_REQUIRED)
+        return
+
+    if not LIVE_RECORDING_ENABLED:
+        await ctx.send(MSG_LIVE_RECORDING_DISABLED)
         return
 
     target_guild = resolve_target_guild(ctx)
@@ -1373,6 +1389,10 @@ async def leave_voice(ctx):
 async def start_recording(ctx, proveedor: str = None, *, nombre_archivo: str = None):
     if not await is_bot_admin(ctx):
         await ctx.send(MSG_ADMIN_REQUIRED)
+        return
+
+    if not LIVE_RECORDING_ENABLED:
+        await ctx.send(MSG_LIVE_RECORDING_DISABLED)
         return
 
     target_guild = resolve_target_guild(ctx)
