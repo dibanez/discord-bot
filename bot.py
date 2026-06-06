@@ -21,10 +21,17 @@ from discord.errors import (
 import wave
 import threading
 import time
-import whisper
 from pydub import AudioSegment
 import io
 from openai import OpenAI
+from transcription import (
+    transcribe_audio_file,
+    normalize_provider,
+    is_valid_provider,
+    provider_label,
+    DEFAULT_TRANSCRIPTION_PROVIDER,
+    VALID_PROVIDERS,
+)
 
 load_dotenv()
 
@@ -150,7 +157,6 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 voice_clients = {}
 recording_data = {}
-whisper_model = None
 openai_client = None
 
 scope = [
@@ -167,18 +173,13 @@ async def on_ready():
     global log_channel
     global support_channel
     global guild
-    global whisper_model
     global openai_client
     guild = discord.utils.get(bot.guilds)
     log_channel = bot.get_channel(LOG_CHANNEL_ID)
     support_channel = bot.get_channel(SUPPORT_CHANNEL_ID)
-    
-    try:
-        whisper_model = whisper.load_model("base")
-        print("✅ Modelo Whisper cargado correctamente")
-    except Exception as e:
-        print(f"⚠️ Error cargando modelo Whisper: {e}")
-    
+
+    print(f"🗣️ Proveedor de transcripción por defecto: {provider_label(DEFAULT_TRANSCRIPTION_PROVIDER)}")
+
     try:
         if OPENAI_API_KEY:
             openai_client = OpenAI(api_key=OPENAI_API_KEY)
@@ -698,8 +699,9 @@ Mantén el resumen conciso pero completo, usando un tono profesional.
 
 
 
-async def recording_finished_callback(sink, channel, filename, guild_id, sink_type="Unknown"):
+async def recording_finished_callback(sink, channel, filename, guild_id, sink_type="Unknown", provider=None):
     """Callback que se ejecuta cuando termina la grabación"""
+    provider = normalize_provider(provider)
     try:
         await channel.send(f"🔄 Procesando audio grabado (Sink: {sink_type})...")
         
@@ -1001,20 +1003,26 @@ async def recording_finished_callback(sink, channel, filename, guild_id, sink_ty
             await channel.send("⚠️ Error: No se pudo crear el archivo de audio final.")
             return
         
-        await channel.send("🔄 Transcribiendo audio...")
-        
+        await channel.send(f"🔄 Transcribiendo audio con {provider_label(provider)}...")
+
         # Calcular duración del audio final
         try:
             from pydub import AudioSegment
             audio_duration = AudioSegment.from_wav(final_audio_file).duration_seconds
         except:
             audio_duration = 0
-        
-        # Transcribir con Whisper
-        if whisper_model:
-            result = whisper_model.transcribe(final_audio_file, language="es")
-            transcript = result["text"].strip()
-            
+
+        # Transcribir con el proveedor seleccionado
+        try:
+            transcript = await transcribe_audio_file(final_audio_file, provider=provider, language="es")
+            transcription_available = True
+        except Exception as transcription_error:
+            transcript = ""
+            transcription_available = False
+            await channel.send(f"❌ Error transcribiendo con {provider_label(provider)}: {transcription_error}")
+            print(f"Error de transcripción ({provider}): {transcription_error}")
+
+        if transcription_available:
             if transcript:
                 # Identificar segmentos de participantes
                 segmented_transcript = identify_speaker_segments(transcript, participants)
@@ -1050,7 +1058,7 @@ async def recording_finished_callback(sink, channel, filename, guild_id, sink_ty
 
 ---
 
-*Transcripción generada automáticamente usando Whisper AI*
+*Transcripción generada automáticamente usando {provider_label(provider)}*
 *Resumen generado con OpenAI GPT-3.5-turbo*
 *Audio capturado directamente del canal de Discord*
 """
@@ -1093,8 +1101,7 @@ async def recording_finished_callback(sink, channel, filename, guild_id, sink_ty
                 
                 await channel.send(f"📁 **Archivo de audio guardado en:** `recordings/{final_audio_file}` (sin transcripción)")
         else:
-            await channel.send("❌ Modelo de transcripción no disponible.")
-            
+            # La transcripción falló; el error ya se notificó arriba. Guardamos el audio igualmente.
             # Crear carpeta de grabaciones si no existe
             recordings_dir = os.path.join(os.getcwd(), "recordings")
             if not os.path.exists(recordings_dir):
@@ -1229,14 +1236,20 @@ async def leave_voice(ctx, *, servidor_nombre: str = None):
 
 
 @bot.command(name="grabar")
-async def start_recording(ctx, servidor_nombre: str = None, *, nombre_archivo: str = None):
+async def start_recording(ctx, servidor_nombre: str = None, proveedor: str = None, *, nombre_archivo: str = None):
     if not await is_bot_admin(ctx):
         await ctx.send(MSG_ADMIN_REQUIRED)
         return
-    
+
     if not voice_clients:
         await ctx.send("❌ No estoy conectado a ningún canal de voz. Usa `!conectar [canal]` primero.")
         return
+
+    # El segundo argumento es opcional: si no es un proveedor válido, forma parte del nombre.
+    if proveedor and not is_valid_provider(proveedor):
+        nombre_archivo = f"{proveedor} {nombre_archivo}".strip() if nombre_archivo else proveedor
+        proveedor = None
+    proveedor = normalize_provider(proveedor)
     
     # Si no se especifica servidor, mostrar opciones
     if servidor_nombre is None:
@@ -1248,7 +1261,7 @@ async def start_recording(ctx, servidor_nombre: str = None, *, nombre_archivo: s
         
         if connected_servers:
             servers_text = "\n".join(connected_servers)
-            await ctx.send(f"❌ Especifica el servidor donde grabar.\n\n**Conectado en:**\n{servers_text}\n\n**Uso:** `!grabar [servidor] [nombre archivo opcional]`")
+            await ctx.send(f"❌ Especifica el servidor donde grabar.\n\n**Conectado en:**\n{servers_text}\n\n**Uso:** `!grabar [servidor] [proveedor] [nombre archivo opcional]`\n**Proveedores:** `openai` (gpt-4o-transcribe), `voxtral` (Mistral), `whisper` (local)")
         return
     
     # Buscar el servidor por nombre
@@ -1318,12 +1331,14 @@ async def start_recording(ctx, servidor_nombre: str = None, *, nombre_archivo: s
             'start_time': time.time(),
             'channel': ctx.channel,
             'guild': target_guild,
-            'voice_client': voice_client
+            'voice_client': voice_client,
+            'provider': proveedor,
         }
-        
+
         channel_name = voice_client.channel.name
         await ctx.send(f"🔴 **Grabación AUTOMÁTICA iniciada**: {nombre_archivo}")
         await ctx.send(f"📍 **Servidor**: {target_guild.name} - Canal: {channel_name}")
+        await ctx.send(f"🗣️ **Transcripción**: {provider_label(proveedor)}")
         await ctx.send("✅ **El bot está grabando automáticamente todo el audio del canal**")
         await ctx.send(f"Usa `!parar {target_guild.name}` para detener la grabación y obtener la transcripción.")
         await ctx.send("🎙️ **Habla normalmente** - El bot captura automáticamente todas las voces del canal.")
@@ -1379,6 +1394,7 @@ async def stop_recording(ctx, *, servidor_nombre: str = None):
     sink = recording_info['sink']
     sink_type = recording_info.get('sink_type', 'Unknown')
     filename = recording_info['filename']
+    provider = recording_info.get('provider')
     
     # Detener la grabación real
     try:
@@ -1396,21 +1412,27 @@ async def stop_recording(ctx, *, servidor_nombre: str = None):
     
     # Procesar el audio directamente aquí
     await asyncio.sleep(3)  # Dar más tiempo a que se finalice la grabación
-    await recording_finished_callback(sink, ctx.channel, filename, target_guild.id, sink_type)
+    await recording_finished_callback(sink, ctx.channel, filename, target_guild.id, sink_type, provider)
     
     if log_channel:
         await log_channel.send(f"⏹️ Grabación automática detenida por {ctx.author.name} en {target_guild.name}. Duración: {duration:.1f}s")
 
 
 @bot.command(name="transcribir")
-async def transcribe_audio(ctx, *, nombre_salida: str = None):
+async def transcribe_audio(ctx, proveedor: str = None, *, nombre_salida: str = None):
     if not await is_bot_admin(ctx):
         await ctx.send(MSG_ADMIN_REQUIRED)
         return
-    
+
     if not ctx.message.attachments:
         await ctx.send("❌ Por favor adjunta un archivo de audio (WAV, MP3, M4A, etc.)")
         return
+
+    # El primer argumento es opcional: si no es un proveedor válido, es el nombre de salida.
+    if proveedor and not is_valid_provider(proveedor):
+        nombre_salida = f"{proveedor} {nombre_salida}".strip() if nombre_salida else proveedor
+        proveedor = None
+    proveedor = normalize_provider(proveedor)
     
     attachment = ctx.message.attachments[0]
     
@@ -1426,13 +1448,19 @@ async def transcribe_audio(ctx, *, nombre_salida: str = None):
         
         audio_file = f"temp_{attachment.filename}"
         await attachment.save(audio_file)
-        
-        await ctx.send("🔄 Transcribiendo audio... Esto puede tomar varios minutos.")
-        
-        if whisper_model:
-            result = whisper_model.transcribe(audio_file, language="es")
-            transcript = result["text"].strip()
-            
+
+        await ctx.send(f"🔄 Transcribiendo audio con {provider_label(proveedor)}... Esto puede tomar varios minutos.")
+
+        try:
+            transcript = await transcribe_audio_file(audio_file, provider=proveedor, language="es")
+            transcription_available = True
+        except Exception as transcription_error:
+            transcript = ""
+            transcription_available = False
+            await ctx.send(f"❌ Error transcribiendo con {provider_label(proveedor)}: {transcription_error}")
+            print(f"Error de transcripción ({proveedor}): {transcription_error}")
+
+        if transcription_available:
             if transcript:
                 # Generar resumen con OpenAI
                 await ctx.send("🔄 Generando resumen del audio...")
@@ -1458,10 +1486,10 @@ async def transcribe_audio(ctx, *, nombre_salida: str = None):
 
 ---
 
-*Transcripción generada automáticamente usando Whisper AI*
+*Transcripción generada automáticamente usando {provider_label(proveedor)}*
 *Resumen generado con OpenAI GPT-3.5-turbo*
 """
-                
+
                 doc_filename = f"{nombre_salida}.md"
                 with open(doc_filename, 'w', encoding='utf-8') as f:
                     f.write(doc_content)
@@ -1482,9 +1510,8 @@ async def transcribe_audio(ctx, *, nombre_salida: str = None):
                     await log_channel.send(f"📄 Transcripción generada por {ctx.author.name} y guardada: {saved_doc_path}")
             else:
                 await ctx.send("⚠️ No se pudo transcribir el audio (posiblemente silencio o audio no reconocible).")
-        else:
-            await ctx.send("❌ Error: Modelo de transcripción no disponible.")
-        
+        # Si la transcripción falló, el error ya se notificó arriba.
+
         os.remove(audio_file)
         
     except Exception as e:
@@ -1552,12 +1579,18 @@ async def recording_status(ctx):
             inline=False
         )
     
-    # Estado del modelo Whisper
-    whisper_status = "✅ Disponible" if whisper_model else "❌ No disponible"
+    # Estado de la transcripción
+    openai_status = "✅" if OPENAI_API_KEY else "❌"
+    mistral_status = "✅" if os.getenv("MISTRAL_API_KEY") else "❌"
     embed.add_field(
-        name="Transcripción (Whisper)",
-        value=whisper_status,
-        inline=True
+        name="Transcripción",
+        value=(
+            f"🔵 Proveedor por defecto: **{provider_label(DEFAULT_TRANSCRIPTION_PROVIDER)}**\n"
+            f"{openai_status} OpenAI (gpt-4o-transcribe)\n"
+            f"{mistral_status} Mistral Voxtral\n"
+            f"✅ Whisper local"
+        ),
+        inline=False
     )
     
     embed.set_footer(text=f"Bot conectado como {bot.user.name}")
