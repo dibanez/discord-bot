@@ -1,6 +1,8 @@
 .venv
 .env
 credentials.json
+credentials.b64.txt
+*.b64.txt
 __pycache__/
 *.pyc
 *.pyo
