@@ -5,6 +5,7 @@ from discord.ext import commands
 from discord.ext.commands import has_permissions
 from discord.ext import commands
 import os
+import shutil
 from dotenv import load_dotenv
 import asyncio
 import gspread
@@ -32,6 +33,7 @@ from transcription import (
     DEFAULT_TRANSCRIPTION_PROVIDER,
     VALID_PROVIDERS,
 )
+import drive_upload
 
 load_dotenv()
 
@@ -713,6 +715,26 @@ Mantén el resumen conciso pero completo, usando un tono profesional.
 
 
 
+async def upload_to_drive_and_notify(channel, paths):
+    """Sube los ficheros a Google Drive (anfaia/recordings) y avisa en el canal.
+
+    La subida corre en un hilo aparte para no bloquear el loop de asyncio, y es
+    tolerante a fallos: si algo va mal, se notifica pero no se interrumpe el flujo.
+    """
+    if not drive_upload.DRIVE_UPLOAD_ENABLED:
+        return
+    try:
+        links = await asyncio.to_thread(drive_upload.upload_files, paths)
+    except Exception as e:
+        print(f"Error subiendo a Drive: {e}")
+        await channel.send("⚠️ No se pudo subir a Google Drive (revisa los logs).")
+        return
+    if links:
+        # <url> evita que Discord genere una previsualización por cada enlace.
+        lines = "\n".join(f"• `{name}` → <{link}>" for name, link in links.items())
+        await channel.send(f"☁️ **Subido a Google Drive (anfaia/recordings):**\n{lines}")
+
+
 async def recording_finished_callback(sink, channel, filename, guild_id, sink_type="Unknown", provider=None):
     """Callback que se ejecuta cuando termina la grabación"""
     provider = normalize_provider(provider)
@@ -766,7 +788,7 @@ async def recording_finished_callback(sink, channel, filename, guild_id, sink_ty
             for i, file_path in enumerate(recent_files):
                 new_name = f"{filename}_user_{i+1}.wav"
                 try:
-                    os.rename(file_path, new_name)
+                    shutil.move(file_path, new_name)
                     audio_files.append(new_name)
                     participants.append(f"Usuario {i+1}")
                     print(f"Archivo procesado: {file_path} -> {new_name}")
@@ -896,7 +918,7 @@ async def recording_finished_callback(sink, channel, filename, guild_id, sink_ty
                         # Archivos creados en los últimos 300 segundos (5 minutos)
                         if age < 300:
                             new_name = f"{filename}_found_{len(audio_files)}.wav"
-                            os.rename(file_path, new_name)
+                            shutil.move(file_path, new_name)
                             audio_files.append(new_name)
                             participants.append(f"Participante {len(audio_files)}")
                             print(f"  ✅ Archivo encontrado: {file_path} -> {new_name}")
@@ -973,7 +995,7 @@ async def recording_finished_callback(sink, channel, filename, guild_id, sink_ty
             else:
                 # Renombrar archivo WAV para mantener consistencia
                 new_name = f"{filename}_combined.wav"
-                os.rename(final_audio_file, new_name)
+                shutil.move(final_audio_file, new_name)
                 final_audio_file = new_name
                 
         else:
@@ -1091,12 +1113,14 @@ async def recording_finished_callback(sink, channel, filename, guild_id, sink_ty
                 saved_audio_path = os.path.join(recordings_dir, final_audio_file)
                 
                 # Mover archivos
-                os.rename(doc_filename, saved_doc_path)
-                os.rename(final_audio_file, saved_audio_path)
+                shutil.move(doc_filename, saved_doc_path)
+                shutil.move(final_audio_file, saved_audio_path)
                 
                 await channel.send(f"✅ **Grabación y transcripción completadas**")
                 await channel.send(f"📁 **Archivos guardados en:** `recordings/{doc_filename}` y `recordings/{final_audio_file}`")
-                
+
+                await upload_to_drive_and_notify(channel, [saved_doc_path, saved_audio_path])
+
                 if log_channel:
                     await log_channel.send(f"📄 Grabación automática completada y guardada: {saved_doc_path}")
                 
@@ -1111,9 +1135,11 @@ async def recording_finished_callback(sink, channel, filename, guild_id, sink_ty
                 
                 # Mover archivo de audio a la carpeta de grabaciones
                 saved_audio_path = os.path.join(recordings_dir, final_audio_file)
-                os.rename(final_audio_file, saved_audio_path)
-                
+                shutil.move(final_audio_file, saved_audio_path)
+
                 await channel.send(f"📁 **Archivo de audio guardado en:** `recordings/{final_audio_file}` (sin transcripción)")
+
+                await upload_to_drive_and_notify(channel, [saved_audio_path])
         else:
             # La transcripción falló; el error ya se notificó arriba. Guardamos el audio igualmente.
             # Crear carpeta de grabaciones si no existe
@@ -1123,9 +1149,11 @@ async def recording_finished_callback(sink, channel, filename, guild_id, sink_ty
             
             # Mover archivo de audio a la carpeta de grabaciones
             saved_audio_path = os.path.join(recordings_dir, final_audio_file)
-            os.rename(final_audio_file, saved_audio_path)
-            
+            shutil.move(final_audio_file, saved_audio_path)
+
             await channel.send(f"📁 **Archivo de audio guardado en:** `recordings/{final_audio_file}` (sin transcripción)")
+
+            await upload_to_drive_and_notify(channel, [saved_audio_path])
             
     except Exception as e:
         await channel.send(f"❌ Error procesando la grabación: {e}")
@@ -1211,9 +1239,10 @@ async def stop_and_process_recording(guild, announce_channel=None):
 # Evita desconexiones por salidas momentáneas. 0 desactiva la auto-desconexión.
 ALONE_DISCONNECT_GRACE = int(os.getenv("ALONE_DISCONNECT_GRACE_SECONDS", "60"))
 
-# La grabación EN VIVO está deshabilitada por defecto: Discord forzó cifrado E2EE
-# (DAVE, marzo 2026) y py-cord aún no descifra el audio recibido (issue #3139).
-# Cuando py-cord publique el fix, fijar esa versión y poner LIVE_RECORDING_ENABLED=true.
+# La grabación EN VIVO funciona con el fork de vito1317/pycord, que descifra el audio
+# DAVE en recepción (Discord forzó E2EE/DAVE en marzo 2026; upstream sigue sin fix,
+# issue #3139). Ver requirements.txt (pin commit 5a95f98). Se controla con el flag.
+# El default sigue en "false" para arranques sin .env; el .env del proyecto lo activa.
 LIVE_RECORDING_ENABLED = os.getenv("LIVE_RECORDING_ENABLED", "false").strip().lower() in ("1", "true", "yes", "si", "sí")
 MSG_LIVE_RECORDING_DISABLED = (
     "🔒 **La grabación en vivo no está disponible ahora mismo.**\n"
@@ -1440,12 +1469,12 @@ async def start_recording(ctx, proveedor: str = None, *, nombre_archivo: str = N
         
         print(f"Usando sink tipo: {sink_type}")
         
-        # Crear un callback async simple que maneja errores
-        async def simple_callback(sink, exc=None):
+        # Callback que py-cord invoca al terminar la grabación. La API nueva lo
+        # llama de forma SÍNCRONA y con un único argumento (la excepción, o None).
+        # El procesamiento real lo hacemos manualmente en !parar.
+        def simple_callback(exc=None):
             if exc:
                 print(f"Error en callback de grabación: {exc}")
-            # No hacer más nada - manejaremos el procesamiento manualmente en !parar
-            pass
             
         # Iniciar la grabación con manejo de errores
         try:
@@ -1587,11 +1616,13 @@ async def transcribe_audio(ctx, proveedor: str = None, *, nombre_salida: str = N
                 
                 # Mover archivo de transcripción a la carpeta de grabaciones
                 saved_doc_path = os.path.join(recordings_dir, doc_filename)
-                os.rename(doc_filename, saved_doc_path)
+                shutil.move(doc_filename, saved_doc_path)
                 
                 await ctx.send("✅ **Transcripción completada**")
                 await ctx.send(f"📁 **Archivo guardado en:** `recordings/{doc_filename}`")
-                
+
+                await upload_to_drive_and_notify(ctx.channel, [saved_doc_path, audio_file])
+
                 if log_channel:
                     await log_channel.send(f"📄 Transcripción generada por {ctx.author.name} y guardada: {saved_doc_path}")
             else:

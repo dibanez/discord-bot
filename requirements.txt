@@ -1,11 +1,17 @@
 # Pycord (no discord.py): librería de Discord con soporte de voz.
-# La grabación EN VIVO está deshabilitada por flag (LIVE_RECORDING_ENABLED) porque
-# Discord forzó cifrado E2EE/DAVE en marzo 2026 y py-cord aún no descifra el audio
-# recibido (issue #3139). 2.8.0 sí soporta el handshake DAVE para conectar a voz.
-# Cuando py-cord publique el fix de recepción, fijar esa versión y activar el flag.
-py-cord[voice]==2.8.0
+# Discord forzó cifrado E2EE/DAVE en marzo 2026 y py-cord upstream aún no descifra el
+# audio recibido (issue #3139). Usamos nuestro propio fork dibanez/pycord, rama
+# fix/voice-recv-classic-sink-compat: parte del master de pycord (que YA descifra DAVE en
+# recepción) y añade la compatibilidad de los sinks clásicos con el nuevo SinkEventRouter
+# (sin ella, start_recording revienta con "'PCMSink' object has no attribute
+# '__sink_listeners__'"). Pinneado al commit exacto para builds reproducibles.
+# NOTA: este install VCS requiere 'git' en la imagen (ver Dockerfile). Si el fix se mergea
+# en pycord upstream, volver a 'py-cord[voice]==<version>' y quitar git del Dockerfile.
+py-cord[voice] @ git+https://github.com/dibanez/pycord@4232fabf71d594adad2ce94e93bb055af858cc95
 gspread
 oauth2client
+# Subida de transcripciones/audio a Google Drive (módulo drive_upload.py).
+google-api-python-client
 python-dotenv
 PyNaCl
 pydub

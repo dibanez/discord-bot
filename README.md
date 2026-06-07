@@ -142,14 +142,15 @@ Esto descubrirá y ejecutará automáticamente todas las pruebas unitarias ubica
 
 ## 🎙️ Funcionalidades de Grabación de Audio
 
-> ⚠️ **La grabación EN VIVO está deshabilitada temporalmente.** Discord forzó el cifrado
-> de extremo a extremo en voz (E2EE/DAVE, marzo 2026) y la librería todavía no puede
-> capturar ese audio ([py-cord issue #3139](https://github.com/Pycord-Development/pycord/issues/3139)).
-> Los comandos `!conectar` y `!grabar` responden con un aviso. Para reactivarla cuando
-> haya fix upstream: fija la versión corregida de py-cord y pon `LIVE_RECORDING_ENABLED=true`.
+> ✅ **La grabación EN VIVO está activada** (`LIVE_RECORDING_ENABLED=true`). Discord forzó
+> el cifrado de extremo a extremo en voz (E2EE/DAVE, marzo 2026) y py-cord *upstream* aún no
+> descifra ese audio ([issue #3139](https://github.com/Pycord-Development/pycord/issues/3139)),
+> así que instalamos el [fork de vito1317](https://github.com/vito1317/pycord/tree/fix/dave-decryption)
+> que implementa el descifrado DAVE en recepción (ver `requirements.txt`, pin al commit `5a95f98`).
+> Pon `LIVE_RECORDING_ENABLED=false` para desactivar la grabación sin tocar dependencias.
 >
-> ✅ **Mientras tanto, usa `!transcribir`**: graba la reunión con otra herramienta
-> (Craig, OBS, el móvil…) y sube el archivo para obtener transcripción y resumen.
+> 💡 **Alternativa sin grabación en vivo**: usa `!transcribir` subiendo un archivo grabado
+> con otra herramienta (Craig, OBS, el móvil…) para obtener transcripción y resumen.
 
 ### Comandos de Grabación (Solo Administradores)
 

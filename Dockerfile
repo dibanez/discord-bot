@@ -2,9 +2,11 @@
 # El proveedor 'whisper' local (PyTorch) NO se incluye; ver requirements-whisper.txt.
 FROM python:3.12-slim
 
-# ffmpeg es necesario para que pydub procese y comprima el audio (export a MP3).
+# ffmpeg: necesario para que pydub procese y comprima el audio (export a MP3).
+# git: necesario para instalar py-cord desde el fork de vito1317 (install VCS en
+#      requirements.txt). Quitar si se vuelve a un release oficial de py-cord en PyPI.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg \
+    && apt-get install -y --no-install-recommends ffmpeg git \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -14,7 +16,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copiar el código de la aplicación.
-COPY bot.py transcription.py ./
+COPY bot.py transcription.py drive_upload.py ./
 
 # Carpeta de salida de transcripciones (se recomienda montarla como volumen).
 RUN mkdir -p /app/recordings
