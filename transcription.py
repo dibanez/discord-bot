@@ -32,6 +32,9 @@ MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY")
 
 # Las APIs en la nube limitan la subida a 25 MB.
 MAX_API_AUDIO_BYTES = 25 * 1024 * 1024
+# gpt-4o-transcribe rechaza además cualquier audio de más de 1400 s (~23 min) por
+# petición, independientemente del tamaño. Troceamos también por duración.
+MAX_API_AUDIO_MS = 1400 * 1000
 
 VALID_PROVIDERS = {"openai", "voxtral", "whisper"}
 
@@ -121,12 +124,12 @@ _API_STITCH_MAX_WORDS = 30
 
 
 def _split_audio_for_api(mp3_path, size_bytes):
-    """Parte un MP3 demasiado grande en trozos que caben bajo el límite de la API.
+    """Parte un MP3 demasiado grande en trozos que caben bajo los límites de la API.
 
-    Divide por tiempo en segmentos de igual duración, calculando cuántos hacen
-    falta a partir de la relación entre el tamaño actual y el límite objetivo.
-    Cada trozo posterior al primero arranca ``_API_CHUNK_OVERLAP_MS`` antes para
-    solapar con el anterior y no perder palabras en las fronteras.
+    Calcula cuántos trozos hacen falta para no superar NI el tamaño (25 MB) NI la
+    duración máxima por petición, y divide por tiempo en segmentos de igual
+    duración. Cada trozo posterior al primero arranca ``_API_CHUNK_OVERLAP_MS``
+    antes para solapar con el anterior y no perder palabras en las fronteras.
     Devuelve la lista de rutas de los trozos generados (archivos temporales).
     """
     from pydub import AudioSegment
@@ -134,8 +137,10 @@ def _split_audio_for_api(mp3_path, size_bytes):
     audio = AudioSegment.from_file(mp3_path)
     duration_ms = len(audio)
 
-    target_bytes = MAX_API_AUDIO_BYTES * _API_CHUNK_TARGET_RATIO
-    num_chunks = max(2, math.ceil(size_bytes / target_bytes))
+    # Nº de trozos necesario por cada límite; nos quedamos con el mayor.
+    by_size = math.ceil(size_bytes / (MAX_API_AUDIO_BYTES * _API_CHUNK_TARGET_RATIO))
+    by_duration = math.ceil(duration_ms / (MAX_API_AUDIO_MS * _API_CHUNK_TARGET_RATIO))
+    num_chunks = max(2, by_size, by_duration)
     chunk_ms = math.ceil(duration_ms / num_chunks)
 
     base = os.path.splitext(mp3_path)[0]
@@ -249,12 +254,14 @@ def _transcribe_sync(audio_path, provider, language):
     chunks = []
     try:
         size = os.path.getsize(prepared)
-        if size <= MAX_API_AUDIO_BYTES:
+        from pydub import AudioSegment
+        duration_ms = len(AudioSegment.from_file(prepared))
+        if size <= MAX_API_AUDIO_BYTES and duration_ms <= MAX_API_AUDIO_MS:
             return api_call(prepared, language)
 
-        # El audio supera el límite de 25 MB: lo partimos en trozos (con solape)
-        # que quepan, transcribimos cada uno y cosemos el texto sin duplicar la
-        # zona solapada de las fronteras.
+        # El audio supera el límite de tamaño (25 MB) o de duración: lo partimos
+        # en trozos (con solape) que quepan, transcribimos cada uno y cosemos el
+        # texto sin duplicar la zona solapada de las fronteras.
         chunks = _split_audio_for_api(prepared, size)
         merged = []
         for chunk in chunks:
