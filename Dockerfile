@@ -16,7 +16,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copiar el código de la aplicación.
-COPY bot.py transcription.py drive_upload.py ./
+COPY bot.py transcription.py drive_upload.py transcribe_file.py transcription.py ./
 
 # Carpeta de salida de transcripciones (se recomienda montarla como volumen).
 RUN mkdir -p /app/recordings
