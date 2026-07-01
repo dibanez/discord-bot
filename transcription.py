@@ -18,6 +18,7 @@ Las funciones públicas son:
 """
 
 import os
+import math
 import asyncio
 
 # --- Configuración (leída de variables de entorno) ---
@@ -107,6 +108,85 @@ def _prepare_audio_for_api(audio_path):
     return mp3_path
 
 
+# Margen de seguridad: apuntamos por debajo del límite porque el bitrate real del
+# MP3 varía ligeramente por trozo (cabecera + VBR) y no queremos rozar los 25 MB.
+_API_CHUNK_TARGET_RATIO = 0.9
+
+# Solape entre trozos consecutivos: cada trozo (salvo el primero) empieza un poco
+# antes para que una palabra cortada justo en la frontera aparezca entera en el
+# trozo siguiente. Al unir el texto se detecta y elimina la parte repetida.
+_API_CHUNK_OVERLAP_MS = 2000
+# Ventana máxima (en palabras) donde buscamos la zona solapada al coser dos trozos.
+_API_STITCH_MAX_WORDS = 30
+
+
+def _split_audio_for_api(mp3_path, size_bytes):
+    """Parte un MP3 demasiado grande en trozos que caben bajo el límite de la API.
+
+    Divide por tiempo en segmentos de igual duración, calculando cuántos hacen
+    falta a partir de la relación entre el tamaño actual y el límite objetivo.
+    Cada trozo posterior al primero arranca ``_API_CHUNK_OVERLAP_MS`` antes para
+    solapar con el anterior y no perder palabras en las fronteras.
+    Devuelve la lista de rutas de los trozos generados (archivos temporales).
+    """
+    from pydub import AudioSegment
+
+    audio = AudioSegment.from_file(mp3_path)
+    duration_ms = len(audio)
+
+    target_bytes = MAX_API_AUDIO_BYTES * _API_CHUNK_TARGET_RATIO
+    num_chunks = max(2, math.ceil(size_bytes / target_bytes))
+    chunk_ms = math.ceil(duration_ms / num_chunks)
+
+    base = os.path.splitext(mp3_path)[0]
+    paths = []
+    for i in range(num_chunks):
+        # El primer trozo empieza en su sitio; los demás retroceden el solape.
+        start = i * chunk_ms if i == 0 else i * chunk_ms - _API_CHUNK_OVERLAP_MS
+        segment = audio[start:(i + 1) * chunk_ms]
+        if len(segment) == 0:
+            break
+        chunk_path = f"{base}_chunk{i}.mp3"
+        segment.export(chunk_path, format="mp3", bitrate="48k")
+        paths.append(chunk_path)
+    return paths
+
+
+def _normalize_word(word):
+    """Minúsculas y sin puntuación en los extremos, para comparar solapes."""
+    return word.lower().strip(".,;:!?¡¿\"'()[]…—-")
+
+
+def _stitch_words(prev_words, next_words):
+    """Une la transcripción acumulada con la del trozo siguiente sin duplicar.
+
+    Busca el mayor solape entre el final de ``prev_words`` y el principio de
+    ``next_words`` (comparando palabras normalizadas) y descarta la repetición,
+    quedándose con la versión limpia del trozo siguiente. Tolera unas pocas
+    palabras "colgando" al final del trozo previo (típicamente una palabra
+    cortada por la frontera), que se descartan al coser.
+    """
+    if not prev_words:
+        return list(next_words)
+    if not next_words:
+        return list(prev_words)
+
+    for skip in range(0, 4):  # palabras sobrantes toleradas al final de prev
+        avail = len(prev_words) - skip
+        if avail <= 0:
+            break
+        max_k = min(_API_STITCH_MAX_WORDS, avail, len(next_words))
+        for k in range(max_k, 1, -1):  # exigimos k>=2 para no coser por casualidad
+            prev_tail = [_normalize_word(w) for w in prev_words[avail - k:avail]]
+            next_head = [_normalize_word(w) for w in next_words[:k]]
+            if prev_tail == next_head:
+                # Descarta el solape (y el sobrante) de prev; next lo aporta limpio.
+                return prev_words[:avail - k] + list(next_words)
+
+    # Sin solape detectable: concatenamos tal cual.
+    return list(prev_words) + list(next_words)
+
+
 def _transcribe_openai(audio_path, language):
     """Transcribe con la API de OpenAI (gpt-4o-transcribe)."""
     if not OPENAI_API_KEY:
@@ -162,24 +242,33 @@ def _transcribe_sync(audio_path, provider, language):
     if canonical not in ("openai", "voxtral"):
         raise ValueError(f"Proveedor de transcripción desconocido: {provider!r}")
 
+    api_call = _transcribe_openai if canonical == "openai" else _transcribe_voxtral
+
     # Para las APIs en la nube comprimimos y validamos el tamaño.
     prepared = _prepare_audio_for_api(audio_path)
+    chunks = []
     try:
         size = os.path.getsize(prepared)
-        if size > MAX_API_AUDIO_BYTES:
-            raise RuntimeError(
-                f"El audio comprimido pesa {size / 1024 / 1024:.1f} MB y supera el límite "
-                f"de 25 MB de la API. Usa el proveedor 'whisper' (local) para audios largos."
-            )
-        if canonical == "openai":
-            return _transcribe_openai(prepared, language)
-        return _transcribe_voxtral(prepared, language)
+        if size <= MAX_API_AUDIO_BYTES:
+            return api_call(prepared, language)
+
+        # El audio supera el límite de 25 MB: lo partimos en trozos (con solape)
+        # que quepan, transcribimos cada uno y cosemos el texto sin duplicar la
+        # zona solapada de las fronteras.
+        chunks = _split_audio_for_api(prepared, size)
+        merged = []
+        for chunk in chunks:
+            text = api_call(chunk, language)
+            if text:
+                merged = _stitch_words(merged, text.split())
+        return " ".join(merged).strip()
     finally:
-        if prepared != audio_path and os.path.exists(prepared):
-            try:
-                os.remove(prepared)
-            except OSError:
-                pass
+        for tmp in [prepared, *chunks]:
+            if tmp != audio_path and os.path.exists(tmp):
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
 
 
 async def transcribe_audio_file(audio_path, provider=None, language="es"):
